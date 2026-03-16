@@ -1,10 +1,298 @@
-# 使用指南 — Dropship Import MCP
+# User Guide / 使用指南 — Dropship Import MCP
+
+> [English](#english) | [中文](#中文)
+
+---
+
+<a id="english"></a>
+
+## English
+
+This guide is for **end users** — how to install, configure, and use this MCP with an AI Agent to import and push products.
+
+---
+
+### 1. Prerequisites
+
+| Item | Requirement |
+|------|-------------|
+| Python | 3.10 or higher |
+| DSers account | Registered, with at least one Shopify store linked |
+| MCP client | Cursor IDE, Claude Desktop, or any MCP-compatible AI client |
+
+---
+
+### 2. Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/lofder/dropship-import-mcp.git
+cd dropship-import-mcp
+
+# Create virtual environment and install dependencies
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+---
+
+### 3. Configuration
+
+#### 3.1 Create `.env` File
+
+```bash
+cp .env.example .env
+```
+
+#### 3.2 Fill in Required Variables
+
+Open `.env` in a text editor and fill in:
+
+```ini
+DSERS_EMAIL=your-dsers-email
+DSERS_PASSWORD=your-dsers-password
+DSERS_ENV=test
+```
+
+| Variable | Description |
+|----------|-------------|
+| `DSERS_EMAIL` | DSers login email |
+| `DSERS_PASSWORD` | DSers login password |
+| `DSERS_ENV` | `test` = test environment, `production` = production environment |
+
+> **Security note**: `.env` is excluded by `.gitignore` and will never be committed to Git.
+
+#### 3.3 Verify Installation
+
+```bash
+# Mock mode (no credentials needed)
+python smoke_mock.py
+
+# DSers Provider (credentials required)
+python smoke_dsers.py
+```
+
+If `smoke_dsers.py` outputs `capabilities` without errors, your credentials are configured correctly.
+
+---
+
+### 4. Connect to AI Client
+
+#### 4.1 Cursor IDE
+
+In Cursor settings, find MCP configuration (Settings → MCP) and add:
+
+```json
+{
+  "mcpServers": {
+    "dropship-import": {
+      "command": "/absolute/path/to/dropship-import-mcp/.venv/bin/python",
+      "args": ["server.py"],
+      "cwd": "/absolute/path/to/dropship-import-mcp"
+    }
+  }
+}
+```
+
+> Replace `/absolute/path/to/` with your actual project path. Using the venv Python path ensures dependencies load correctly.
+
+#### 4.2 Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
+
+```json
+{
+  "mcpServers": {
+    "dropship-import": {
+      "command": "/absolute/path/to/dropship-import-mcp/.venv/bin/python",
+      "args": ["server.py"],
+      "cwd": "/absolute/path/to/dropship-import-mcp"
+    }
+  }
+}
+```
+
+Restart the client after configuration to start using the import tools.
+
+---
+
+### 5. Usage
+
+After connecting the MCP, you can use natural language to instruct the AI Agent.
+
+#### 5.1 Import and Push a Product
+
+> **You say**: Import this product to my Shopify store  
+> https://www.aliexpress.com/item/1005006xxxxx.html  
+> Mark up the price by 50%, add "HOT - " before the title
+
+The Agent will automatically:
+
+1. Call `get_rule_capabilities` to get the store list
+2. Call `prepare_import_candidate` to import and apply rules
+3. Show preview and ask for confirmation
+4. Call `confirm_push_to_store` to push to the store
+5. Call `get_job_status` to confirm the result
+
+#### 5.2 Preview Only
+
+> **You say**: Show me the details of this product, don't push yet  
+> https://www.aliexpress.com/item/1005006xxxxx.html
+
+The Agent will only proceed to the preview step and wait for your confirmation.
+
+#### 5.3 Batch Operations
+
+> **You say**: Import all 3 products below to my store, mark up 80%  
+> - https://...  
+> - https://...  
+> - https://...
+
+The Agent will import and push them sequentially (serial execution in current version).
+
+#### 5.4 Specify Push Options
+
+> **You say**: Push this product but don't list it on the storefront, keep it as a draft, and enable auto inventory sync
+
+The Agent will set the corresponding push_options:
+- `publish_to_online_store: false`
+- `auto_inventory_update: true`
+- `visibility_mode: backend_only`
+
+---
+
+### 6. Push Options Reference
+
+Use these keywords in conversation and the Agent will map them to push options:
+
+| What You Say | Option | Value |
+|--------------|--------|-------|
+| "publish" / "list it" | `publish_to_online_store` | `true` |
+| "draft only" / "don't publish" | `publish_to_online_store` | `false` |
+| "push all images" | `image_strategy` | `all_available` |
+| "use store pricing rule" | `pricing_rule_behavior` | `apply_store_pricing_rule` |
+| "auto sync inventory" | `auto_inventory_update` | `true` |
+| "auto sync price" | `auto_price_update` | `true` |
+
+---
+
+### 7. Rules
+
+You can specify rules in natural language during import. The Agent converts them to structured rule objects:
+
+#### Pricing Rules
+
+| Description | Example |
+|-------------|---------|
+| Markup percentage | "mark up 50%" → `markup_percent: 50` |
+| Fixed markup | "add $5 each" → `fixed_markup: 5` |
+| Multiplier | "multiply price by 2.5" → `multiplier: 2.5` |
+
+#### Content Rules
+
+| Description | Example |
+|-------------|---------|
+| Title prefix | "add HOT before title" → `title_prefix: "HOT - "` |
+| Title suffix | "add Free Shipping after title" → `title_suffix: " | Free Shipping"` |
+| Title override | "change title to xxx" → `title_override: "xxx"` |
+
+#### Image Rules
+
+| Description | Example |
+|-------------|---------|
+| Limit image count | "keep only first 5 images" → `keep_first_n: 5` |
+| Skip first image | "remove the first image" → `drop_indexes: [0]` |
+
+---
+
+### 8. FAQ
+
+#### Q: Push fails with "shipping profile not found"
+
+**Cause**: The target Shopify store requires a Delivery Profile binding.
+
+**Solution**: Tell the Agent to provide store_shipping_profile, or find the Delivery Profile info from DSers web UI and provide it to the Agent:
+
+```json
+{
+  "store_shipping_profile": [
+    {
+      "storeId": "your-store-id",
+      "locationId": "gid://shopify/DeliveryLocationGroup/xxx",
+      "profileId": "gid://shopify/DeliveryProfile/xxx"
+    }
+  ]
+}
+```
+
+The system automatically tries to fetch this via API. Manual input is only needed when the API returns empty.
+
+#### Q: Invalid credentials / login failed
+
+1. Check `DSERS_EMAIL` and `DSERS_PASSWORD` in `.env`
+2. Confirm `DSERS_ENV` matches your account environment (test / production)
+3. Delete `.session-cache/` and retry (clears expired sessions)
+
+#### Q: Target store not found
+
+1. Confirm your DSers account has a linked Shopify store
+2. Specify the store name or ID explicitly in conversation
+3. Call `get_rule_capabilities` to see all available stores
+
+#### Q: How to switch to production
+
+Change `DSERS_ENV` in `.env` to `production`:
+
+```ini
+DSERS_ENV=production
+```
+
+Then restart the MCP server.
+
+#### Q: Are suppliers other than AliExpress supported?
+
+Currently supported:
+- **AliExpress** — full support
+- **Alibaba (1688)** — basic support
+- **Accio** — basic support
+
+#### Q: How to use a different platform instead of DSers
+
+Set the environment variable to switch provider:
+
+```ini
+IMPORT_PROVIDER_MODULE=dropship_import_mcp.mock_provider
+```
+
+`mock_provider` is a built-in offline simulator for development and demos. You can also implement your own provider (see [ARCHITECTURE.md](ARCHITECTURE.md) Section 5).
+
+---
+
+### 9. Troubleshooting Checklist
+
+When you encounter issues, check in this order:
+
+1. **`.env` file exists** — must be copied from `.env.example`
+2. **Python version** — run `python3 --version` to confirm ≥ 3.10
+3. **Dependencies installed** — run `pip install -r requirements.txt`
+4. **Virtual environment active** — confirm terminal shows `(.venv)` prefix
+5. **MCP client path** — confirm you're using the Python path inside venv
+6. **Smoke test** — run `python smoke_dsers.py` and check output
+7. **Check warnings** — all MCP responses include a `warnings` array, pay attention to hints
+
+---
+---
+
+<a id="中文"></a>
+
+## 中文
 
 本文档面向**最终使用者**，介绍如何安装、配置并通过 AI Agent 使用本 MCP 完成商品导入与推送。
 
 ---
 
-## 1. 前置条件
+### 1. 前置条件
 
 | 项目 | 要求 |
 |------|------|
@@ -14,7 +302,7 @@
 
 ---
 
-## 2. 安装
+### 2. 安装
 
 ```bash
 # 克隆仓库
@@ -29,15 +317,15 @@ pip install -r requirements.txt
 
 ---
 
-## 3. 配置
+### 3. 配置
 
-### 3.1 创建 `.env` 文件
+#### 3.1 创建 `.env` 文件
 
 ```bash
 cp .env.example .env
 ```
 
-### 3.2 填写必需变量
+#### 3.2 填写必需变量
 
 用编辑器打开 `.env`，填入以下内容：
 
@@ -55,7 +343,7 @@ DSERS_ENV=test
 
 > **安全提示**：`.env` 文件已被 `.gitignore` 排除，不会被提交到 Git。
 
-### 3.3 验证安装
+#### 3.3 验证安装
 
 ```bash
 # Mock 模式验证（无需凭据）
@@ -69,9 +357,9 @@ python smoke_dsers.py
 
 ---
 
-## 4. 接入 AI 客户端
+### 4. 接入 AI 客户端
 
-### 4.1 Cursor IDE
+#### 4.1 Cursor IDE
 
 在 Cursor 设置中找到 MCP 配置（Settings → MCP），添加：
 
@@ -89,7 +377,7 @@ python smoke_dsers.py
 
 > 将 `/绝对路径/` 替换为你的实际项目路径。使用虚拟环境的 Python 路径可以确保依赖正确加载。
 
-### 4.2 Claude Desktop
+#### 4.2 Claude Desktop
 
 编辑 `~/Library/Application Support/Claude/claude_desktop_config.json`（macOS）：
 
@@ -109,11 +397,11 @@ python smoke_dsers.py
 
 ---
 
-## 5. 使用方式
+### 5. 使用方式
 
 接入 MCP 后，你可以直接用自然语言指示 AI Agent 完成以下操作。
 
-### 5.1 导入并推送一个商品
+#### 5.1 导入并推送一个商品
 
 > **你说**：帮我把这个商品导入到我的 Shopify 店铺
 > https://www.aliexpress.com/item/1005006xxxxx.html
@@ -127,14 +415,14 @@ Agent 会自动执行以下流程：
 4. 调用 `confirm_push_to_store` 推送到店铺
 5. 调用 `get_job_status` 确认推送结果
 
-### 5.2 只预览不推送
+#### 5.2 只预览不推送
 
 > **你说**：帮我看看这个商品的详情，先不要推送
 > https://www.aliexpress.com/item/1005006xxxxx.html
 
 Agent 只会执行到预览步骤，等待你确认后才推送。
 
-### 5.3 批量操作
+#### 5.3 批量操作
 
 > **你说**：把以下 3 个链接的商品都导入到我的店铺，统一加价 80%
 > - https://...
@@ -143,7 +431,7 @@ Agent 只会执行到预览步骤，等待你确认后才推送。
 
 Agent 会逐个导入并推送（当前版本为串行执行）。
 
-### 5.4 指定推送选项
+#### 5.4 指定推送选项
 
 > **你说**：推送这个商品，但是先不要上架到前端，只在后台显示，同时开启自动同步库存
 
@@ -154,7 +442,7 @@ Agent 会将对应的 push_options 设置为：
 
 ---
 
-## 6. 推送选项详解
+### 6. 推送选项详解
 
 在对话中提到以下关键词，Agent 会自动匹配对应的推送选项：
 
@@ -169,11 +457,11 @@ Agent 会将对应的 push_options 设置为：
 
 ---
 
-## 7. 规则说明
+### 7. 规则说明
 
 你可以在导入时通过自然语言指定规则，Agent 会转换为结构化规则对象：
 
-### 定价规则
+#### 定价规则
 
 | 描述 | 示例 |
 |------|------|
@@ -181,7 +469,7 @@ Agent 会将对应的 push_options 设置为：
 | 固定加价 | "每个加 5 美元" → `fixed_markup: 5` |
 | 倍数 | "价格乘以 2.5" → `multiplier: 2.5` |
 
-### 内容规则
+#### 内容规则
 
 | 描述 | 示例 |
 |------|------|
@@ -189,7 +477,7 @@ Agent 会将对应的 push_options 设置为：
 | 标题后缀 | "标题后加 Free Shipping" → `title_suffix: " | Free Shipping"` |
 | 替换标题 | "把标题改成 xxx" → `title_override: "xxx"` |
 
-### 图片规则
+#### 图片规则
 
 | 描述 | 示例 |
 |------|------|
@@ -198,9 +486,9 @@ Agent 会将对应的 push_options 设置为：
 
 ---
 
-## 8. 常见问题
+### 8. 常见问题
 
-### Q: 推送失败提示 "shipping profile not found"
+#### Q: 推送失败提示 "shipping profile not found"
 
 **原因**：目标 Shopify 店铺需要 Delivery Profile 绑定。
 
@@ -220,19 +508,19 @@ Agent 会将对应的 push_options 设置为：
 
 系统会自动尝试通过 API 获取这些信息。只有 API 返回空时才需要手动提供。
 
-### Q: 提示凭据无效 / 登录失败
+#### Q: 提示凭据无效 / 登录失败
 
 1. 检查 `.env` 中的 `DSERS_EMAIL` 和 `DSERS_PASSWORD` 是否正确
 2. 确认 `DSERS_ENV` 值与你的账号环境匹配（test / production）
 3. 删除 `.session-cache/` 目录后重试（清除过期的 session 缓存）
 
-### Q: 找不到目标店铺
+#### Q: 找不到目标店铺
 
 1. 确认你的 DSers 账户已绑定 Shopify 店铺
 2. 在对话中明确指定店铺名称或 ID
 3. 调用 `get_rule_capabilities` 查看所有可用店铺
 
-### Q: 如何切换到生产环境
+#### Q: 如何切换到生产环境
 
 将 `.env` 中的 `DSERS_ENV` 改为 `production`：
 
@@ -242,14 +530,14 @@ DSERS_ENV=production
 
 然后重启 MCP 服务器。
 
-### Q: 是否支持 AliExpress 以外的供应商
+#### Q: 是否支持 AliExpress 以外的供应商
 
 当前支持：
 - **AliExpress** — 完整支持
 - **Alibaba (1688)** — 基本支持
 - **Accio** — 基本支持
 
-### Q: 如何不使用 DSers，换成其他平台
+#### Q: 如何不使用 DSers，换成其他平台
 
 设置环境变量切换 Provider：
 
@@ -261,7 +549,7 @@ IMPORT_PROVIDER_MODULE=dropship_import_mcp.mock_provider
 
 ---
 
-## 9. 故障排查清单
+### 9. 故障排查清单
 
 遇到问题时按以下顺序检查：
 

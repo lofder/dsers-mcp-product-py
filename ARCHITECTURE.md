@@ -1,14 +1,285 @@
-# 技术架构文档 — Dropship Import MCP
+# Technical Architecture / 技术架构文档 — Dropship Import MCP
 
-## 1. 项目定位
+> [English](#english) | [中文](#中文)
 
-**Dropship Import MCP** 是一个基于 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 的服务器，为 AI Agent 提供**一件代发商品导入 → 编辑 → 推送到店铺**的完整工作流。
+---
+
+<a id="english"></a>
+
+## English
+
+### 1. Overview
+
+**Dropship Import MCP** is an [MCP](https://modelcontextprotocol.io/) server that gives AI Agents a complete **import → edit → push-to-store** workflow for dropshipping products.
+
+Agents call 7 high-level tools to go from a supplier URL to a live store listing, without knowing any platform API details.
+
+---
+
+### 2. Directory Structure
+
+```
+dropship-import-mcp/
+├── server.py                     # MCP server entry (stdio transport)
+├── dropship_import_mcp/          # Core package — protocol layer
+│   ├── provider.py               # ImportProvider ABC + dynamic loading
+│   ├── mock_provider.py          # Offline mock provider (dev / demo)
+│   ├── service.py                # ImportFlowService — tool orchestration
+│   ├── job_store.py              # Job persistence (FileJobStore)
+│   ├── push_options.py           # push_options validation & normalization
+│   ├── resolver.py               # Source URL resolution
+│   └── rules.py                  # Rules engine (pricing / content / images)
+├── dsers_provider/               # DSers adapter layer
+│   ├── __init__.py
+│   └── provider.py               # PrivateDsersProvider — ImportProvider impl
+├── vendor-dsers/                 # DSers platform API library
+│   ├── dsers_mcp_base/           # Infrastructure: auth, HTTP client, config
+│   │   ├── auth.py
+│   │   ├── client.py
+│   │   └── config.py
+│   ├── dsers_account.py          # Account & store management
+│   ├── dsers_product.py          # Product import, push, status
+│   ├── dsers_settings.py         # Shipping templates & config
+│   ├── dsers_order.py            # Order management
+│   └── dsers_logistics.py        # Logistics tracking
+├── smoke_mock.py                 # Mock provider smoke test
+├── smoke_dsers.py                # DSers provider smoke test
+├── SKILL.md                      # AI Agent skill guide
+├── ARCHITECTURE.md               # This document
+├── USAGE.md                      # User guide
+├── .env.example                  # Environment variable template
+├── .gitignore
+├── requirements.txt
+└── LICENSE
+```
+
+---
+
+### 3. Three-Layer Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│  MCP Client (Claude / Cursor / Agent)       │
+└──────────────────┬──────────────────────────┘
+                   │ MCP Protocol (stdio)
+┌──────────────────▼──────────────────────────┐
+│  server.py + dropship_import_mcp/           │
+│  ┌────────────────────────────────────────┐ │
+│  │  ImportFlowService (orchestration)     │ │
+│  │  ├─ Rules Engine                       │ │
+│  │  ├─ Push Options   normalization       │ │
+│  │  └─ Job Store      state persistence   │ │
+│  └──────────────┬─────────────────────────┘ │
+│                 │ ImportProvider ABC         │
+│  ┌──────────────▼─────────────────────────┐ │
+│  │  dsers_provider/ (adapter layer)       │ │
+│  │  ├─ prepare_candidate()                │ │
+│  │  ├─ commit_candidate()                 │ │
+│  │  └─ get_rule_capabilities()            │ │
+│  └──────────────┬─────────────────────────┘ │
+│                 │ vendor library (sys.path)  │
+│  ┌──────────────▼─────────────────────────┐ │
+│  │  vendor-dsers/ (platform API lib)      │ │
+│  │  ├─ dsers_mcp_base/  infrastructure    │ │
+│  │  ├─ dsers_product    product API       │ │
+│  │  ├─ dsers_account    account API       │ │
+│  │  └─ dsers_settings   config API        │ │
+│  └────────────────────────────────────────┘ │
+└─────────────────────────────────────────────┘
+```
+
+| Layer | Directory | Responsibility | Replaceable |
+|-------|-----------|----------------|-------------|
+| **Protocol** | `dropship_import_mcp/` | 7 MCP tools, prepare → review → push orchestration | Fixed |
+| **Adapter** | `dsers_provider/` | Implements `ImportProvider`, translates platform-agnostic requests into platform-specific calls | Swappable |
+| **Platform Lib** | `vendor-dsers/` | Low-level HTTP API wrappers (auth, product, order, logistics) | Replaced with adapter |
+
+---
+
+### 4. Tool Flow
+
+#### 4.1 Full Push Flow
+
+```
+Agent                              MCP Server
+  │                                    │
+  ├─ get_rule_capabilities() ────────► │ returns rules / stores / channels
+  │                                    │
+  ├─ validate_rules({rules}) ────────► │ validates rule structure
+  │                                    │
+  ├─ prepare_import_candidate() ─────► │ resolve URL → import → apply rules
+  │                                    │ returns job_id + draft preview
+  │                                    │
+  ├─ get_import_preview(job_id) ─────► │ view edited draft
+  │                                    │
+  ├─ set_product_visibility() ───────► │ (optional) adjust visibility
+  │                                    │
+  ├─ confirm_push_to_store() ────────► │ commit push → poll status
+  │                                    │ returns completed / failed
+  │                                    │
+  └─ get_job_status(job_id) ─────────► │ query final status
+```
+
+#### 4.2 Tool Summary
+
+| Tool | Description | Required Params |
+|------|-------------|-----------------|
+| `get_rule_capabilities` | Query provider's rule families and push options | — |
+| `validate_rules` | Validate rule structure, return normalized object | `rules` |
+| `prepare_import_candidate` | Import from supplier URL and generate preview | `source_url` |
+| `get_import_preview` | View prepared job preview | `job_id` |
+| `set_product_visibility` | Change visibility (backend_only / sell_immediately) | `job_id`, `visibility_mode` |
+| `confirm_push_to_store` | Confirm push to target store | `job_id` |
+| `get_job_status` | Query push status | `job_id` |
+
+---
+
+### 5. Provider Extension
+
+#### 5.1 ImportProvider Interface
+
+```python
+class ImportProvider(ABC):
+    name = "abstract"
+
+    async def get_rule_capabilities(self, target_store=None) -> dict: ...
+    async def prepare_candidate(self, source_url, source_hint, country) -> dict: ...
+    async def commit_candidate(self, provider_state, draft, target_store,
+                                visibility_mode, push_options) -> dict: ...
+```
+
+#### 5.2 Adding a New Provider
+
+1. Create `your_provider/provider.py` implementing the three `ImportProvider` methods
+2. Expose a `build_provider()` factory function
+3. Set `IMPORT_PROVIDER_MODULE=your_provider.provider`
+
+#### 5.3 Provider Loading
+
+`load_provider()` dynamically imports the module specified by `IMPORT_PROVIDER_MODULE` and calls its `build_provider()` factory. Defaults to `dsers_provider.provider`.
+
+---
+
+### 6. DSers Adapter Details
+
+#### 6.1 Authentication Flow
+
+```
+DSersConfig.from_env() → email / password
+        │
+DSersClient.__init__() → try restoring from session_file
+        │
+first / expired → POST /passport/login → get session_id → cache to session_file
+        │
+subsequent → Bearer {session_id} header
+```
+
+#### 6.2 vendor-dsers Dynamic Loading
+
+`PrivateDsersProvider.__init__()` adds `vendor-dsers/` to `sys.path`, then uses `importlib` to dynamically load each business module's `register()` function to obtain handlers.
+
+#### 6.3 Shipping Profile Auto-Attach
+
+During push, Shopify Delivery Profile is handled automatically:
+1. First tries API query via `dsers_get_store_shipping_profile`
+2. Falls back to `push_options.store_shipping_profile` if API returns empty
+3. Issues a warning if neither is available (push may fail with "shipping profile not found")
+
+---
+
+### 7. Push Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `publish_to_online_store` | `bool` | Publish to online storefront |
+| `only_push_specifications` | `bool` | Push specification data only |
+| `image_strategy` | `str` | `selected_only` / `all_available` |
+| `pricing_rule_behavior` | `str` | `keep_manual` / `apply_store_pricing_rule` |
+| `auto_inventory_update` | `bool` | Auto-sync inventory |
+| `auto_price_update` | `bool` | Auto-sync price |
+| `sales_channels` | `list` | Sales channel identifiers |
+| `store_shipping_profile` | `list` | Platform delivery profile bindings (fallback) |
+
+---
+
+### 8. Local Development
+
+#### 8.1 Setup
+
+```bash
+git clone <repo-url> && cd dropship-import-mcp
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+#### 8.2 Smoke Tests
+
+```bash
+python smoke_mock.py                      # offline, no credentials
+python smoke_dsers.py                     # needs .env credentials
+SAMPLE_IMPORT_URL="https://..." python smoke_dsers.py   # with real import
+```
+
+#### 8.3 Run as MCP Server
+
+```bash
+python server.py
+```
+
+Cursor MCP config:
+
+```json
+{
+  "mcpServers": {
+    "dropship-import": {
+      "command": "python",
+      "args": ["server.py"],
+      "cwd": "/path/to/dropship-import-mcp"
+    }
+  }
+}
+```
+
+---
+
+### 9. Security Notes
+
+- **`.env` files are never committed** — excluded in `.gitignore`
+- **Session caches** (`.session-cache/`, `.session.json`) are excluded in `.gitignore`
+- Credentials are injected via environment variables, no hardcoding in source
+- All API calls in `vendor-dsers/` go through `DSersClient` which manages sessions centrally
+
+---
+
+### 10. Known Limitations & Roadmap
+
+| Status | Description |
+|--------|-------------|
+| ⚠️ Current | Test environment API (`DSERS_ENV=test`) |
+| ⚠️ Current | `store_shipping_profile` API returns empty in some environments, requires push_options fallback |
+| 🔜 Next | Switch to production API |
+| 🔜 Next | Support additional platform providers (non-DSers) |
+| 🔜 Next | Batch import support |
+| 🔜 Next | Tag editing in rules engine |
+
+---
+---
+
+<a id="中文"></a>
+
+## 中文
+
+### 1. 项目定位
+
+**Dropship Import MCP** 是一个基于 [MCP](https://modelcontextprotocol.io/) 的服务器，为 AI Agent 提供**一件代发商品导入 → 编辑 → 推送到店铺**的完整工作流。
 
 Agent 只需调用 7 个高层工具，即可完成从供应商 URL 到店铺上架的全过程，无需了解底层平台 API 细节。
 
 ---
 
-## 2. 目录结构
+### 2. 目录结构
 
 ```
 dropship-import-mcp/
@@ -38,6 +309,7 @@ dropship-import-mcp/
 ├── smoke_dsers.py                # DSers Provider 冒烟测试
 ├── SKILL.md                      # AI Agent 使用指南
 ├── ARCHITECTURE.md               # 本文档
+├── USAGE.md                      # 使用指南
 ├── .env.example                  # 环境变量模板
 ├── .gitignore
 ├── requirements.txt
@@ -46,7 +318,7 @@ dropship-import-mcp/
 
 ---
 
-## 3. 三层架构
+### 3. 三层架构
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -87,9 +359,9 @@ dropship-import-mcp/
 
 ---
 
-## 4. 工具流程
+### 4. 工具流程
 
-### 4.1 完整推送流程
+#### 4.1 完整推送流程
 
 ```
 Agent                              MCP Server
@@ -111,7 +383,7 @@ Agent                              MCP Server
   └─ get_job_status(job_id) ─────────► │ 查询最终状态
 ```
 
-### 4.2 工具一览
+#### 4.2 工具一览
 
 | 工具名 | 说明 | 必需参数 |
 |--------|------|----------|
@@ -125,9 +397,9 @@ Agent                              MCP Server
 
 ---
 
-## 5. Provider 扩展机制
+### 5. Provider 扩展机制
 
-### 5.1 ImportProvider 接口
+#### 5.1 ImportProvider 接口
 
 ```python
 class ImportProvider(ABC):
@@ -139,21 +411,21 @@ class ImportProvider(ABC):
                                 visibility_mode, push_options) -> dict: ...
 ```
 
-### 5.2 新增 Provider
+#### 5.2 新增 Provider
 
 1. 创建 `your_provider/provider.py`，实现 `ImportProvider` 的三个方法
 2. 暴露 `build_provider()` 工厂函数
 3. 设置环境变量 `IMPORT_PROVIDER_MODULE=your_provider.provider`
 
-### 5.3 Provider 加载机制
+#### 5.3 Provider 加载机制
 
 `load_provider()` 通过 `IMPORT_PROVIDER_MODULE` 环境变量动态加载指定模块，调用其 `build_provider()` 工厂函数返回实例。默认加载 `dsers_provider.provider`。
 
 ---
 
-## 6. DSers 适配层详解
+### 6. DSers 适配层详解
 
-### 6.1 认证流程
+#### 6.1 认证流程
 
 ```
 DSersConfig.from_env() → email/password
@@ -165,11 +437,11 @@ DSersClient.__init__() → 尝试从 session_file 恢复
 后续请求 → Bearer {session_id} header
 ```
 
-### 6.2 vendor-dsers 动态加载
+#### 6.2 vendor-dsers 动态加载
 
 `PrivateDsersProvider.__init__()` 将 `vendor-dsers/` 加入 `sys.path`，然后通过 `importlib` 动态加载各业务模块的 `register()` 函数获取 handler。
 
-### 6.3 Shipping Profile 自动附加
+#### 6.3 Shipping Profile 自动附加
 
 推送时自动处理 Shopify Delivery Profile：
 1. 先尝试 API 查询 `dsers_get_store_shipping_profile`
@@ -178,7 +450,7 @@ DSersClient.__init__() → 尝试从 session_file 恢复
 
 ---
 
-## 7. Push Options
+### 7. Push Options
 
 | 选项 | 类型 | 说明 |
 |------|------|------|
@@ -193,39 +465,27 @@ DSersClient.__init__() → 尝试从 session_file 恢复
 
 ---
 
-## 8. 本地开发
+### 8. 本地开发
 
-### 8.1 环境搭建
+#### 8.1 环境搭建
 
 ```bash
-# 克隆仓库
 git clone <repo-url> && cd dropship-import-mcp
-
-# 创建虚拟环境
 python3 -m venv .venv && source .venv/bin/activate
-
-# 安装依赖
 pip install -r requirements.txt
-
-# 配置环境变量
 cp .env.example .env
 # 编辑 .env 填入你的凭据
 ```
 
-### 8.2 冒烟测试
+#### 8.2 冒烟测试
 
 ```bash
-# Mock Provider（离线，无需凭据）
-python smoke_mock.py
-
-# DSers Provider（需要 .env 中的凭据）
-python smoke_dsers.py
-
-# 带实际导入的冒烟测试
-SAMPLE_IMPORT_URL="https://www.aliexpress.com/item/xxx.html" python smoke_dsers.py
+python smoke_mock.py                      # 离线，无需凭据
+python smoke_dsers.py                     # 需要 .env 中的凭据
+SAMPLE_IMPORT_URL="https://..." python smoke_dsers.py   # 带实际导入
 ```
 
-### 8.3 作为 MCP 服务器运行
+#### 8.3 作为 MCP 服务器运行
 
 ```bash
 python server.py
@@ -247,7 +507,7 @@ python server.py
 
 ---
 
-## 9. 安全注意事项
+### 9. 安全注意事项
 
 - **`.env` 文件绝不提交到 Git** — 已在 `.gitignore` 中排除
 - **Session 缓存文件**（`.session-cache/`、`.session.json`）已在 `.gitignore` 中排除
@@ -256,7 +516,7 @@ python server.py
 
 ---
 
-## 10. 已知限制 & 迭代计划
+### 10. 已知限制 & 迭代计划
 
 | 状态 | 说明 |
 |------|------|
