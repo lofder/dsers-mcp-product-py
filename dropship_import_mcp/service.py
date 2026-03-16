@@ -1,3 +1,30 @@
+"""
+Import Flow Service — Orchestrates the complete import lifecycle.
+导入流程服务 —— 编排完整的导入生命周期
+
+This service is the central coordinator between all subsystems:
+  resolver → provider → rules → push_options → job_store
+
+A typical lifecycle:
+  1. prepare_import_candidate — resolve URL, import, apply rules, save preview
+  2. (optional) get_import_preview / set_product_visibility — review & adjust
+  3. confirm_push_to_store — push the finalised draft to the target store
+
+All methods accept a flat dict (the MCP tool arguments) and return a dict
+(the MCP tool response). The service never talks to vendor APIs directly;
+it delegates to the injected ImportProvider.
+
+本服务是所有子系统之间的中央协调者：
+  resolver → provider → rules → push_options → job_store
+
+典型的生命周期：
+  1. prepare_import_candidate — 解析 URL、导入、应用规则、保存预览
+  2. （可选）get_import_preview / set_product_visibility — 审查和调整
+  3. confirm_push_to_store — 将最终草稿推送到目标店铺
+
+所有方法接受扁平字典（MCP 工具参数）并返回字典（MCP 工具响应）。
+服务不直接与供应商 API 通信，而是委托给注入的 ImportProvider。
+"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -12,11 +39,25 @@ from dropship_import_mcp.rules import apply_rules, normalize_rules
 
 
 class ImportFlowService:
+    """
+    Stateless orchestrator — all state lives in the FileJobStore.
+    无状态编排器 —— 所有状态都保存在 FileJobStore 中。
+    """
+
     def __init__(self, provider: ImportProvider, store: FileJobStore) -> None:
         self._provider = provider
         self._store = store
 
+    # ── Step 0: Capability discovery / 步骤 0：能力发现 ──
+
     async def get_rule_capabilities(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Return what the loaded provider supports: stores, rule families,
+        push options, and any advisory notes.
+
+        返回当前加载的提供者支持的内容：店铺列表、规则族、
+        推送选项以及任何咨询说明。
+        """
         target_store = payload.get("target_store")
         provider_caps = await self._provider.get_rule_capabilities(target_store=target_store)
         return {
@@ -29,6 +70,10 @@ class ImportFlowService:
         }
 
     async def validate_rules(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Dry-run rule validation without importing a product.
+        不导入商品的规则校验试运行。
+        """
         target_store = payload.get("target_store")
         rules = payload.get("rules") or {}
         provider_caps = await self._provider.get_rule_capabilities(target_store=target_store)
@@ -42,7 +87,16 @@ class ImportFlowService:
             "errors": validation.get("errors", []),
         }
 
+    # ── Step 1: Import and preview / 步骤 1：导入和预览 ──
+
     async def prepare_import_candidate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Full import pipeline: resolve URL → provider.prepare → apply rules
+        → persist job → return preview.
+
+        完整导入流水线：解析 URL → provider.prepare → 应用规则
+        → 持久化任务 → 返回预览。
+        """
         source_url = str(payload.get("source_url") or "").strip()
         if not source_url:
             raise ValueError("source_url is required")
@@ -65,6 +119,8 @@ class ImportFlowService:
             country=country,
         )
 
+        # Keep the unmodified draft for before/after comparison in preview.
+        # 保留未修改的草稿，用于预览中的前后对比。
         original_draft = deepcopy(prepared["draft"])
         effective_rules = validated_rules.get("effective_rules", {})
         ruled = apply_rules(prepared["draft"], effective_rules)
@@ -99,13 +155,23 @@ class ImportFlowService:
         return self._preview(job)
 
     async def get_import_preview(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Reload a previously prepared preview by job_id.
+        通过 job_id 重新加载之前准备的预览。
+        """
         job_id = str(payload.get("job_id") or "").strip()
         if not job_id:
             raise ValueError("job_id is required")
         job = self._store.load(job_id)
         return self._preview(job)
 
+    # ── Step 2: Adjust before push / 步骤 2：推送前调整 ──
+
     async def set_product_visibility(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Change visibility_mode (backend_only ↔ sell_immediately) before confirmation.
+        在确认推送前更改 visibility_mode（backend_only ↔ sell_immediately）。
+        """
         job_id = str(payload.get("job_id") or "").strip()
         visibility_mode = str(payload.get("visibility_mode") or "").strip()
         if not job_id or not visibility_mode:
@@ -120,7 +186,16 @@ class ImportFlowService:
             "visibility_mode": visibility_mode,
         }
 
+    # ── Step 3: Push to store / 步骤 3：推送到店铺 ──
+
     async def confirm_push_to_store(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Final confirmation: validate push options → delegate to provider.commit
+        → persist result. This is the only step with real side effects.
+
+        最终确认：校验推送选项 → 委托给 provider.commit → 持久化结果。
+        这是唯一具有真实副作用的步骤。
+        """
         job_id = str(payload.get("job_id") or "").strip()
         if not job_id:
             raise ValueError("job_id is required")
@@ -166,7 +241,13 @@ class ImportFlowService:
             "warnings": list(push_option_check.get("warnings") or []) + list(result.get("warnings", [])),
         }
 
+    # ── Status query / 状态查询 ──
+
     async def get_job_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Return current status and metadata for a job.
+        返回任务的当前状态和元数据。
+        """
         job_id = str(payload.get("job_id") or "").strip()
         if not job_id:
             raise ValueError("job_id is required")
@@ -182,7 +263,13 @@ class ImportFlowService:
             "has_push_result": bool(job.get("push_result")),
         }
 
+    # ── Preview builder / 预览构建 ──
+
     def _preview(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build a human-readable preview comparing the original and final draft.
+        构建可读的预览，对比原始草稿和最终草稿。
+        """
         original = job["original_draft"]
         final = job["draft"]
         preview = {
@@ -221,7 +308,15 @@ class ImportFlowService:
         return preview
 
 
+# ──────────────────────────────────────────────────────────────
+#  Module-level helpers / 模块级辅助函数
+# ──────────────────────────────────────────────────────────────
+
 def _price_range(draft: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """
+    Extract the min/max price across all variants for display in preview.
+    提取所有变体的最低/最高价格，用于预览展示。
+    """
     prices = []
     for variant in draft.get("variants") or []:
         for key in ("offer_price", "supplier_price"):

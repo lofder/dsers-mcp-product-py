@@ -1,3 +1,24 @@
+"""
+Private DSers Provider — Concrete ImportProvider for the DSers platform.
+私有 DSers 提供者 —— DSers 平台的具体 ImportProvider 实现
+
+This adapter dynamically loads the vendor-dsers library at init time and
+wires up the DSers account / product / settings handlers. It translates
+the normalised import draft (title, variants, images) back into the raw
+field structure that the DSers backend expects, handling edge cases like:
+  - Multiple URL formats (AliExpress, Alibaba, 1688)
+  - Variant price de-normalisation with original field keys
+  - Store shipping profile attachment for Shopify
+  - Shipping template & logistics resolution
+
+本适配器在初始化时动态加载 vendor-dsers 库，并连接 DSers 的账户/商品/
+设置处理器。它将标准化的导入草稿（标题、变体、图片）反向转换为 DSers
+后端期望的原始字段结构，处理以下边缘情况：
+  - 多种 URL 格式（AliExpress、Alibaba、1688）
+  - 使用原始字段键反标准化变体价格
+  - 为 Shopify 附加店铺配送档案
+  - 运输模板与物流方式解析
+"""
 from __future__ import annotations
 
 import asyncio
@@ -14,10 +35,17 @@ from dotenv import load_dotenv
 
 from dropship_import_mcp.provider import ImportProvider
 
+# ──────────────────────────────────────────────────────────────
+#  Constants / 常量
+# ──────────────────────────────────────────────────────────────
 
+# Default source app IDs used by DSers to identify supplier platforms.
+# DSers 用于识别供应商平台的默认来源应用 ID。
 DEFAULT_ALIEXPRESS_APP_ID = "159831080"
-# The current DSers test account resolves Alibaba product URLs through this source app.
 DEFAULT_ALIBABA_APP_ID = "1902659021782450176"
+
+# Shopify sales channels supported for the push request.
+# 推送请求支持的 Shopify 销售渠道。
 DEFAULT_PUSH_CHANNELS = [
     "online_store",
     "shop_app",
@@ -26,15 +54,36 @@ DEFAULT_PUSH_CHANNELS = [
     "facebook_instagram",
     "amazon",
 ]
+
+# Regex patterns to extract numeric product IDs from supplier URLs.
+# 从供应商 URL 中提取数字商品 ID 的正则表达式。
 ALIEXPRESS_ID_PATTERN = re.compile(r"/item/(\d+)\.html", re.IGNORECASE)
 ALIBABA_ID_PATTERN = re.compile(r"/product-detail/[^_]+_(\d+)\.html", re.IGNORECASE)
 ALI1688_ID_PATTERN = re.compile(r"1688\.com/(?:offer|product-detail)/(\d+)\.html", re.IGNORECASE)
 
 
 class PrivateDsersProvider(ImportProvider):
+    """
+    Concrete adapter that implements the ImportProvider contract using DSers APIs.
+    使用 DSers API 实现 ImportProvider 契约的具体适配器。
+
+    Architecture: this class sits between the public protocol layer and the
+    vendor-dsers library. It never exposes raw DSers API names to the caller.
+
+    架构：此类位于公开协议层和 vendor-dsers 库之间，
+    不会向调用方暴露原始的 DSers API 名称。
+    """
+
     name = "private-dsers"
 
     def __init__(self) -> None:
+        """
+        Bootstrap the DSers adapter: load env, locate vendor-dsers,
+        instantiate the shared HTTP client, and register module handlers.
+
+        引导 DSers 适配器：加载环境变量、定位 vendor-dsers 库、
+        实例化共享 HTTP 客户端、注册各模块处理器。
+        """
         load_dotenv()
         self._vendor_dir = Path(
             os.getenv(
@@ -75,7 +124,15 @@ class PrivateDsersProvider(ImportProvider):
         self._aliexpress_app_id = int(os.getenv("PRIVATE_DSERS_ALIEXPRESS_APP_ID", DEFAULT_ALIEXPRESS_APP_ID))
         self._alibaba_app_id = int(os.getenv("PRIVATE_DSERS_ALIBABA_APP_ID", DEFAULT_ALIBABA_APP_ID))
 
+    # ── ImportProvider interface / ImportProvider 接口实现 ──
+
     async def get_rule_capabilities(self, target_store: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Query linked stores and declare which rules, push options, and
+        visibility modes this adapter supports.
+
+        查询已关联店铺，声明此适配器支持的规则、推送选项和可见性模式。
+        """
         stores = await self._list_stores()
         visibility_modes = ["backend_only", "sell_immediately"]
 
@@ -140,6 +197,13 @@ class PrivateDsersProvider(ImportProvider):
         source_hint: str,
         country: str,
     ) -> Dict[str, Any]:
+        """
+        Import pipeline: parse URL → resolve product ID → call DSers import API
+        → fetch the draft → normalise into the standard schema.
+
+        导入流水线：解析 URL → 提取商品 ID → 调用 DSers 导入 API
+        → 获取草稿 → 标准化为统一 schema。
+        """
         source_kind, app_id, supply_product_id = self._resolve_source_identifier(source_url)
         if not supply_product_id:
             parse_payload = await self._call(
@@ -212,6 +276,13 @@ class PrivateDsersProvider(ImportProvider):
         visibility_mode: str,
         push_options: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Push pipeline: de-normalise draft → update import list item → resolve store
+        → build push payload → attach shipping info → push → poll status.
+
+        推送流水线：反标准化草稿 → 更新导入列表项 → 解析店铺
+        → 构建推送 payload → 附加运输信息 → 推送 → 轮询状态。
+        """
         field_map = provider_state.get("field_map") or {}
         warnings: List[str] = []
         pricing_rule_behavior = str(push_options.get("pricing_rule_behavior") or "keep_manual")
@@ -315,6 +386,8 @@ class PrivateDsersProvider(ImportProvider):
             },
         }
 
+    # ── Internal helpers / 内部辅助方法 ──
+
     async def _call(self, handler: Any, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         contents = await handler(name, arguments)
         text_parts = [item.text for item in contents if hasattr(item, "text")]
@@ -336,6 +409,13 @@ class PrivateDsersProvider(ImportProvider):
         visibility_mode: str,
         push_options: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Assemble the raw push request payload matching the DSers web UI format.
+        This structure was reverse-engineered from browser network captures.
+
+        组装与 DSers 网页端格式一致的原始推送请求 payload。
+        此结构通过浏览器网络抓包逆向工程获得。
+        """
         import_list_id = self._coerce_numeric_id(import_item_id)
         store_id = self._coerce_numeric_id(store_ref)
         visible = bool(push_options.get("publish_to_online_store"))
@@ -384,6 +464,10 @@ class PrivateDsersProvider(ImportProvider):
         return request
 
     async def _refresh_product_shipping_info(self, provider_state: Dict[str, Any]) -> List[str]:
+        """
+        Re-save the user's shipping template before push to ensure it's active.
+        在推送前重新保存用户的运输模板，确保其处于激活状态。
+        """
         source_app_id = provider_state.get("source_app_id")
         if source_app_id in (None, ""):
             return []
@@ -433,6 +517,13 @@ class PrivateDsersProvider(ImportProvider):
         store_ref: str,
         push_args: Dict[str, Any],
     ) -> List[str]:
+        """
+        Match a logistics service ID from the user's shipping template to
+        the available push-logistics options, then inject it into push_args.
+
+        将用户运输模板中的物流服务 ID 与可用的推送物流选项匹配，
+        然后注入到 push_args 中。
+        """
         if push_args.get("logistics"):
             return []
 
@@ -483,6 +574,15 @@ class PrivateDsersProvider(ImportProvider):
         push_args: Dict[str, Any],
         push_options: Dict[str, Any],
     ) -> List[str]:
+        """
+        Attach Shopify DeliveryProfile to the push request. Without this,
+        Shopify rejects the push with 'shipping profile not found'.
+        First tries the API; falls back to push_options if the API returns empty.
+
+        将 Shopify DeliveryProfile 附加到推送请求。如果缺少此字段，
+        Shopify 会以 'shipping profile not found' 拒绝推送。
+        优先尝试 API 查询；如果 API 返回为空则回退到 push_options 中的值。
+        """
         if push_args.get("storeShippingProfile"):
             return []
 
@@ -725,7 +825,17 @@ class PrivateDsersProvider(ImportProvider):
             self._find_first_value_by_keys(payload, ["supplyProductId", "productId", "itemId", "id"]) or ""
         ).strip()
 
+    # ── URL & ID parsing / URL 和 ID 解析 ──
+
     def _resolve_source_identifier(self, source_url: str) -> Tuple[str, int, str]:
+        """
+        Extract platform kind, app ID, and product ID from a supplier URL.
+        Returns ("unknown", default_app_id, "") if the URL does not match
+        any known pattern.
+
+        从供应商 URL 中提取平台类型、应用 ID 和商品 ID。
+        如果 URL 不匹配任何已知模式，返回 ("unknown", 默认应用ID, "")。
+        """
         source_url = source_url or ""
         match = ALIEXPRESS_ID_PATTERN.search(source_url)
         if match:
@@ -757,7 +867,19 @@ class PrivateDsersProvider(ImportProvider):
                 return str(item_id)
         return ""
 
+    # ── Draft normalisation & de-normalisation / 草稿标准化与反标准化 ──
+
     def _normalize_import_item(self, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], List[str]]:
+        """
+        Convert a raw DSers import item into the standard draft schema
+        (title, description_html, images, tags, variants). Also builds a
+        field_map that records which raw keys map to which standard fields,
+        enabling lossless de-normalisation during commit.
+
+        将原始 DSers 导入项转换为标准草稿 schema
+        （title、description_html、images、tags、variants）。同时构建
+        field_map 记录原始键到标准字段的映射，确保提交时可无损反标准化。
+        """
         item = self._extract_import_item(payload)
         warnings: List[str] = []
 
@@ -809,6 +931,12 @@ class PrivateDsersProvider(ImportProvider):
         return draft, field_map, warnings
 
     def _denormalize_variants(self, normalized_variants: List[Dict[str, Any]], field_map: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Write normalised variant values back into the original raw structure,
+        preserving all extra fields the backend expects.
+
+        将标准化的变体值写回原始的原始结构，保留后端期望的所有额外字段。
+        """
         raw_variants = deepcopy(field_map.get("raw_variants") or [])
         if not raw_variants:
             return normalized_variants
@@ -836,6 +964,13 @@ class PrivateDsersProvider(ImportProvider):
         return raw_variants
 
     def _denormalize_supply(self, normalized_variants: List[Dict[str, Any]], field_map: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Write normalised prices back into the 'supply' dict (keyed by variant_ref).
+        DSers keeps a parallel price structure under 'supply' alongside 'variants'.
+
+        将标准化价格写回 'supply' 字典（以 variant_ref 为键）。
+        DSers 在 'variants' 之外还维护了一个平行的 'supply' 价格结构。
+        """
         raw_supply = deepcopy(field_map.get("raw_supply") or {})
         if not isinstance(raw_supply, dict):
             return {}
@@ -993,7 +1128,16 @@ class PrivateDsersProvider(ImportProvider):
         scored.sort(key=lambda item: item[0], reverse=True)
         return scored[0][1]
 
+    # ── Push status parsing / 推送状态解析 ──
+
     def _extract_push_state(self, payload: Dict[str, Any]) -> str:
+        """
+        Map DSers numeric push status codes to human-readable strings.
+        DSers uses: 0/1 = requested, 4 = failed, 5 = completed.
+
+        将 DSers 数字推送状态码映射为可读字符串。
+        DSers 使用：0/1 = 已请求，4 = 失败，5 = 完成。
+        """
         state = self._find_first_value_by_keys(payload, ["status", "state", "result"])
         mapped_states = {
             0: "requested",
@@ -1014,6 +1158,12 @@ class PrivateDsersProvider(ImportProvider):
         reason = self._find_first_value_by_keys(payload, ["reason"])
         pieces = [str(part).strip() for part in (message, reason) if part not in (None, "")]
         return " | ".join(dict.fromkeys(pieces))
+
+    # ── Generic JSON traversal helpers / 通用 JSON 遍历辅助方法 ──
+    # These helpers navigate DSers responses whose structure may vary
+    # between API versions, making the adapter resilient to schema drift.
+    # 这些辅助方法用于遍历 DSers 响应（其结构在不同 API 版本间可能不同），
+    # 使适配器能抵御 schema 漂移。
 
     def _find_list_candidates(self, node: Any, prefix: str = "root") -> List[Tuple[str, List[Dict[str, Any]]]]:
         results: List[Tuple[str, List[Dict[str, Any]]]] = []
@@ -1078,7 +1228,16 @@ class PrivateDsersProvider(ImportProvider):
         except (TypeError, ValueError):
             return None
 
+    # ── Type coercion / 类型强制转换 ──
+
     def _coerce_like(self, original: Any, value: Any) -> Any:
+        """
+        Coerce a value to match the type of the original (str vs numeric).
+        Prevents type mismatches when writing prices back to the raw payload.
+
+        将值强制转换为与原始值相同的类型（字符串 vs 数值）。
+        防止将价格写回原始 payload 时发生类型不匹配。
+        """
         if value is None:
             return value
         if isinstance(original, str):

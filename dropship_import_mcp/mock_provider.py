@@ -1,3 +1,18 @@
+"""
+Mock Import Provider — Deterministic stub for testing and development.
+模拟导入提供者 —— 用于测试和开发的确定性桩模块
+
+Returns hard-coded sample data so the full import flow can be exercised
+without any real platform credentials. Useful for:
+  - CI pipelines that validate the protocol layer
+  - Local development when the private adapter is unavailable
+  - Demonstrating the MCP workflow to new contributors
+
+返回硬编码的示例数据，使完整的导入流程无需真实平台凭据即可运行。适用于：
+  - CI 流水线中验证协议层
+  - 私有适配器不可用时的本地开发
+  - 向新贡献者演示 MCP 工作流
+"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -6,6 +21,8 @@ from typing import Any, Dict, Optional
 from dropship_import_mcp.provider import ImportProvider
 
 
+# Sample product used by the mock provider for all imports.
+# 模拟提供者在所有导入中使用的示例商品。
 _SAMPLE_DRAFT = {
     "title": "Sample Wireless Charger",
     "description_html": "<p>Sample product prepared by the mock provider.</p>",
@@ -37,9 +54,18 @@ _SAMPLE_DRAFT = {
 
 
 class MockImportProvider(ImportProvider):
+    """
+    A provider that always succeeds with deterministic sample data.
+    一个始终返回确定性示例数据的提供者。
+    """
+
     name = "mock"
 
     async def get_rule_capabilities(self, target_store: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Advertise broad capabilities so all rule families can be tested.
+        声明广泛的能力，使所有规则族都可以被测试。
+        """
         return {
             "provider_label": "Mock Provider",
             "source_support": ["aliexpress", "accio_best_effort"],
@@ -93,6 +119,10 @@ class MockImportProvider(ImportProvider):
         source_hint: str,
         country: str,
     ) -> Dict[str, Any]:
+        """
+        Return a deep copy of the sample draft as the import candidate.
+        返回示例草稿的深拷贝作为导入候选项。
+        """
         return {
             "provider_state": {
                 "candidate_ref": "mock-candidate-1",
@@ -112,6 +142,10 @@ class MockImportProvider(ImportProvider):
         visibility_mode: str,
         push_options: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Simulate a successful push — no real side effects.
+        模拟推送成功 —— 没有真实的副作用。
+        """
         return {
             "provider_label": "Mock Provider",
             "job_status": "pushed",
@@ -130,4 +164,8 @@ class MockImportProvider(ImportProvider):
 
 
 def build_provider() -> ImportProvider:
+    """
+    Factory function required by the provider loader.
+    提供者加载器所需的工厂函数。
+    """
     return MockImportProvider()

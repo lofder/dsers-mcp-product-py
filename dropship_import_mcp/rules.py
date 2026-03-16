@@ -1,8 +1,31 @@
+"""
+Rule Engine — Validate, normalise, and apply structured import rules.
+规则引擎 —— 校验、标准化和应用结构化导入规则
+
+Rules let callers customise how an imported product draft is transformed
+before it gets pushed to a store. Three rule families are supported:
+  - pricing  : multiplier / fixed-markup pricing adjustments
+  - content  : title override / prefix / suffix, description, tags
+  - images   : keep-first-N, drop-indexes, (future) translate / remove-logo
+
+All normalisation is done against the provider's declared capabilities,
+so unsupported rules produce warnings instead of silent failures.
+
+规则允许调用方在将导入的商品草稿推送到店铺之前，自定义其转换方式。
+支持三个规则族：
+  - pricing  : 乘数 / 固定加价的价格调整
+  - content  : 标题覆盖 / 前缀 / 后缀、描述、标签
+  - images   : 保留前 N 张图、按索引删除、（未来）翻译 / 去水印
+
+所有标准化操作都参照提供者声明的能力进行，因此不支持的规则会产生
+警告而非静默失败。
+"""
 from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Set
 
+# --- Known keys for each rule family / 各规则族的已知键 ---
 _KNOWN_TOP_LEVEL_RULE_KEYS = {"pricing", "content", "images", "instruction_text"}
 _KNOWN_PRICING_KEYS = {"mode", "multiplier", "fixed_markup", "round_digits"}
 _KNOWN_CONTENT_KEYS = {
@@ -17,7 +40,19 @@ _KNOWN_IMAGE_KEYS = {"keep_first_n", "drop_indexes", "translate_image_text", "re
 _DEFAULT_PRICING_MODES = {"provider_default", "multiplier", "fixed_markup"}
 
 
+# ──────────────────────────────────────────────────────────────
+#  Normalisation — turn raw user rules into validated, effective rules
+#  标准化 —— 将原始用户规则转换为经过校验的有效规则
+# ──────────────────────────────────────────────────────────────
+
 def normalize_rules(rules: Dict[str, Any], rule_capabilities: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Validate user-supplied rules against provider capabilities and
+    return effective_rules (safe to apply) along with any warnings/errors.
+
+    根据提供者能力校验用户提供的规则，返回 effective_rules（可安全应用的
+    规则）以及任何警告/错误信息。
+    """
     requested_rules = deepcopy(rules or {})
     warnings: List[str] = []
     errors: List[str] = []
@@ -50,6 +85,8 @@ def normalize_rules(rules: Dict[str, Any], rule_capabilities: Optional[Dict[str,
     if images:
         effective_rules["images"] = images
 
+    # instruction_text is stored for operator context but not auto-applied.
+    # instruction_text 仅为操作者上下文存储，不会自动应用。
     instruction_text = requested_rules.get("instruction_text")
     if instruction_text not in (None, ""):
         if isinstance(instruction_text, str):
@@ -68,7 +105,18 @@ def normalize_rules(rules: Dict[str, Any], rule_capabilities: Optional[Dict[str,
     }
 
 
+# ──────────────────────────────────────────────────────────────
+#  Application — mutate the draft according to effective rules
+#  应用 —— 根据有效规则修改草稿
+# ──────────────────────────────────────────────────────────────
+
 def apply_rules(draft: Dict[str, Any], rules: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Apply validated rules to a product draft and return the modified draft
+    along with a summary of what was changed.
+
+    将已校验的规则应用到商品草稿，返回修改后的草稿及变更摘要。
+    """
     draft = deepcopy(draft)
     summary: Dict[str, Any] = {"applied": [], "warnings": []}
 
@@ -93,12 +141,27 @@ def apply_rules(draft: Dict[str, Any], rules: Dict[str, Any]) -> Dict[str, Any]:
     return {"draft": draft, "summary": summary}
 
 
+# ──────────────────────────────────────────────────────────────
+#  Pricing rules / 价格规则
+# ──────────────────────────────────────────────────────────────
+
 def _normalize_pricing_rules(
     pricing: Any,
     capability: Optional[Dict[str, Any]],
     warnings: List[str],
     errors: List[str],
 ) -> Dict[str, Any]:
+    """
+    Validate pricing rules. Supports three modes:
+      - provider_default: no price change
+      - multiplier: base_price × multiplier
+      - fixed_markup: base_price + fixed amount
+
+    校验价格规则。支持三种模式：
+      - provider_default：不改价
+      - multiplier：底价 × 倍率
+      - fixed_markup：底价 + 固定加价
+    """
     if pricing in (None, {}):
         return {}
     if not isinstance(pricing, dict):
@@ -155,6 +218,10 @@ def _normalize_content_rules(
     warnings: List[str],
     errors: List[str],
 ) -> Dict[str, Any]:
+    """
+    Validate content rules (title, description, tags).
+    校验内容规则（标题、描述、标签）。
+    """
     if content in (None, {}):
         return {}
     if not isinstance(content, dict):
@@ -198,6 +265,10 @@ def _normalize_image_rules(
     warnings: List[str],
     errors: List[str],
 ) -> Dict[str, Any]:
+    """
+    Validate image rules (keep_first_n, drop_indexes, future flags).
+    校验图片规则（保留前 N 张、按索引删除、未来功能标志）。
+    """
     if images in (None, {}):
         return {}
     if not isinstance(images, dict):
@@ -254,7 +325,15 @@ def _normalize_image_rules(
     return normalized
 
 
+# ──────────────────────────────────────────────────────────────
+#  Rule application helpers / 规则应用辅助函数
+# ──────────────────────────────────────────────────────────────
+
 def _apply_pricing_rules(draft: Dict[str, Any], pricing: Dict[str, Any], summary: Dict[str, Any]) -> None:
+    """
+    Apply pricing adjustments to all variants in the draft.
+    对草稿中的所有变体应用价格调整。
+    """
     mode = pricing.get("mode", "provider_default")
     if mode == "provider_default":
         return
@@ -283,6 +362,10 @@ def _apply_pricing_rules(draft: Dict[str, Any], pricing: Dict[str, Any], summary
 
 
 def _apply_content_rules(draft: Dict[str, Any], content: Dict[str, Any], summary: Dict[str, Any]) -> None:
+    """
+    Apply content overrides/edits to the draft's title, description, and tags.
+    对草稿的标题、描述和标签应用内容覆盖/编辑。
+    """
     title = draft.get("title") or ""
     if content.get("title_override"):
         title = str(content["title_override"]).strip()
@@ -310,9 +393,15 @@ def _apply_content_rules(draft: Dict[str, Any], content: Dict[str, Any], summary
 
 
 def _apply_image_rules(draft: Dict[str, Any], images: Dict[str, Any], summary: Dict[str, Any]) -> None:
+    """
+    Apply image filtering (drop specific indexes, keep first N).
+    应用图片筛选（删除指定索引、保留前 N 张）。
+    """
     image_list = list(draft.get("images") or [])
     original_count = len(image_list)
 
+    # Drop by index in reverse order to keep remaining indexes stable.
+    # 按逆序删除索引，保证剩余索引不发生偏移。
     drop_indexes = sorted(set(images.get("drop_indexes") or []), reverse=True)
     for idx in drop_indexes:
         if 0 <= idx < len(image_list):
@@ -333,7 +422,15 @@ def _apply_image_rules(draft: Dict[str, Any], images: Dict[str, Any], summary: D
     )
 
 
+# ──────────────────────────────────────────────────────────────
+#  Utility helpers / 工具辅助函数
+# ──────────────────────────────────────────────────────────────
+
 def _first_price(variant: Dict[str, Any]) -> Any:
+    """
+    Return the best available price from a variant (offer_price first, then supplier_price).
+    返回变体的最佳可用价格（优先 offer_price，其次 supplier_price）。
+    """
     for key in ("offer_price", "supplier_price"):
         value = variant.get(key)
         parsed = _as_float(value, None)
@@ -352,6 +449,13 @@ def _as_float(value: Any, default: Any) -> Any:
 
 
 def _allowed_rule_keys(capability: Optional[Dict[str, Any]], default_keys: Set[str]) -> Set[str]:
+    """
+    Determine which rule keys are allowed based on provider capability declarations.
+    The supported field can be True (all), False (none), or a list of specific keys.
+
+    根据提供者的能力声明确定允许哪些规则键。
+    supported 字段可以是 True（全部）、False（无）或具体键列表。
+    """
     capability = capability or {}
     supported = capability.get("supported")
     unsupported = {str(item) for item in capability.get("unsupported") or []}
