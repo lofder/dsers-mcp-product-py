@@ -2,6 +2,14 @@
 
 基于 [Model Context Protocol](https://modelcontextprotocol.io/) 的一件代发商品导入服务。AI Agent 通过 7 个高层工具，完成从供应商 URL 到店铺上架的全过程。
 
+## 文档导航
+
+| 文档 | 内容 |
+|------|------|
+| [USAGE.md — 使用指南](USAGE.md) | 安装配置、接入客户端、使用方式、常见问题 |
+| [ARCHITECTURE.md — 技术架构](ARCHITECTURE.md) | 三层架构、工具流程、Provider 扩展、DSers 适配层详解 |
+| [SKILL.md — Agent Skill](SKILL.md) | AI Agent 工具参考、参数格式、Push Options |
+
 ## 核心工具
 
 | 工具 | 说明 |
@@ -47,7 +55,7 @@ dropship-import-mcp/
 └── .env.example              # 环境变量模板
 ```
 
-详细架构见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+详细说明见上方「文档导航」。
 
 ## 环境变量
 
