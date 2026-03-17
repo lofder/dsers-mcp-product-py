@@ -46,7 +46,7 @@ class DSersClient:
         # auto-retry once on token expiry
         if resp.status_code == 400 and not _retried:
             body = resp.json()
-            if body.get("reason") in ("TOKEN_NOT_FOUND", "TOKEN_EXPIRED", "UNAUTHORIZED"):
+            if body.get("reason") in ("TOKEN_NOT_FOUND", "TOKEN_EXPIRED", "UNAUTHORIZED", "INVALID_TOKEN"):
                 self._auth.invalidate()
                 return await self.request(method, path, params=params, json=json, _retried=True)
 
