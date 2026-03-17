@@ -5,31 +5,22 @@ Import Flow Service — Orchestrates the complete import lifecycle.
 This service is the central coordinator between all subsystems:
   resolver → provider → rules → push_options → job_store
 
-A typical lifecycle:
-  1. prepare_import_candidate — resolve URL, import, apply rules, save preview
-  2. (optional) get_import_preview / set_product_visibility — review & adjust
-  3. confirm_push_to_store — push the finalised draft to the target store
+Supports both single and batch modes:
+  - Single: source_url / job_id  (original behaviour, fully backward-compatible)
+  - Batch:  source_urls / job_ids (iterate and return per-item results)
+  - Multi-store: target_stores    (one job pushed to N stores in one call)
 
-All methods accept a flat dict (the MCP tool arguments) and return a dict
-(the MCP tool response). The service never talks to vendor APIs directly;
-it delegates to the injected ImportProvider.
-
-本服务是所有子系统之间的中央协调者：
-  resolver → provider → rules → push_options → job_store
-
-典型的生命周期：
-  1. prepare_import_candidate — 解析 URL、导入、应用规则、保存预览
-  2. （可选）get_import_preview / set_product_visibility — 审查和调整
-  3. confirm_push_to_store — 将最终草稿推送到目标店铺
-
-所有方法接受扁平字典（MCP 工具参数）并返回字典（MCP 工具响应）。
-服务不直接与供应商 API 通信，而是委托给注入的 ImportProvider。
+同时支持单条和批量模式：
+  - 单条：source_url / job_id（原始行为，完全向后兼容）
+  - 批量：source_urls / job_ids（逐条执行并返回每条结果）
+  - 多店铺：target_stores（一个 job 在一次调用中推到 N 个店铺）
 """
 from __future__ import annotations
 
+import uuid as _uuid
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from dropship_import_mcp.job_store import FileJobStore
 from dropship_import_mcp.provider import ImportProvider
@@ -87,15 +78,30 @@ class ImportFlowService:
             "errors": validation.get("errors", []),
         }
 
-    # ── Step 1: Import and preview / 步骤 1：导入和预览 ──
+    # ══════════════════════════════════════════════════════════════
+    #  Step 1: Import — single or batch
+    #  步骤 1：导入 —— 单条或批量
+    # ══════════════════════════════════════════════════════════════
 
     async def prepare_import_candidate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Full import pipeline: resolve URL → provider.prepare → apply rules
-        → persist job → return preview.
+        Unified entry point for single and batch import.
+        单条和批量导入的统一入口。
 
-        完整导入流水线：解析 URL → provider.prepare → 应用规则
-        → 持久化任务 → 返回预览。
+        - If `source_urls` (list) is present → batch mode
+        - Otherwise falls back to `source_url` (string) → single mode
+        - 如果存在 `source_urls`（列表）→ 批量模式
+        - 否则回退到 `source_url`（字符串）→ 单条模式
+        """
+        source_urls = payload.get("source_urls")
+        if isinstance(source_urls, list):
+            return await self._batch_prepare(payload, source_urls)
+        return await self._prepare_single(payload)
+
+    async def _prepare_single(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Original single-item import pipeline (fully backward-compatible).
+        原始单条导入流水线（完全向后兼容）。
         """
         source_url = str(payload.get("source_url") or "").strip()
         if not source_url:
@@ -119,8 +125,6 @@ class ImportFlowService:
             country=country,
         )
 
-        # Keep the unmodified draft for before/after comparison in preview.
-        # 保留未修改的草稿，用于预览中的前后对比。
         original_draft = deepcopy(prepared["draft"])
         effective_rules = validated_rules.get("effective_rules", {})
         ruled = apply_rules(prepared["draft"], effective_rules)
@@ -154,6 +158,58 @@ class ImportFlowService:
         self._store.save(job_id, job)
         return self._preview(job)
 
+    async def _batch_prepare(self, payload: Dict[str, Any], source_urls: List[Any]) -> Dict[str, Any]:
+        """
+        Batch import: iterate over source_urls, call _prepare_single for each.
+        Each item can be a plain URL string or an object with per-item overrides.
+        Failures are captured per-item and do not stop the batch.
+
+        批量导入：遍历 source_urls，逐条调用 _prepare_single。
+        每项可以是纯 URL 字符串或带单条覆盖的对象。
+        单条失败不会中断整个批次。
+        """
+        if not source_urls:
+            return {"error": "source_urls must be a non-empty list / source_urls 不能为空列表"}
+
+        batch_id = f"batch-{_uuid.uuid4().hex[:12]}"
+        # Shared defaults from the batch-level payload.
+        # 从批次级 payload 中提取共享默认值。
+        shared_keys = ("country", "target_store", "visibility_mode", "source_hint")
+        shared = {k: payload.get(k) for k in shared_keys if payload.get(k) is not None}
+        shared_rules = payload.get("rules")
+
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+        failed = 0
+
+        for idx, item in enumerate(source_urls):
+            url, item_payload = _parse_batch_item(item, shared, shared_rules)
+            if not url:
+                results.append({"index": idx, "source_url": "", "error": "Empty or invalid URL entry / 空或无效的 URL 条目"})
+                failed += 1
+                continue
+
+            try:
+                preview = await self._prepare_single(item_payload)
+                preview["index"] = idx
+                results.append(preview)
+                succeeded += 1
+            except Exception as exc:
+                results.append({"index": idx, "source_url": url, "error": str(exc)})
+                failed += 1
+
+        return {
+            "batch_id": batch_id,
+            "total": len(source_urls),
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+
+    # ══════════════════════════════════════════════════════════════
+    #  Preview & visibility / 预览和可见性
+    # ══════════════════════════════════════════════════════════════
+
     async def get_import_preview(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Reload a previously prepared preview by job_id.
@@ -165,12 +221,10 @@ class ImportFlowService:
         job = self._store.load(job_id)
         return self._preview(job)
 
-    # ── Step 2: Adjust before push / 步骤 2：推送前调整 ──
-
     async def set_product_visibility(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Change visibility_mode (backend_only ↔ sell_immediately) before confirmation.
-        在确认推送前更改 visibility_mode（backend_only ↔ sell_immediately）。
+        Change visibility_mode (backend_only / sell_immediately) before confirmation.
+        在确认推送前更改 visibility_mode（backend_only / sell_immediately）。
         """
         job_id = str(payload.get("job_id") or "").strip()
         visibility_mode = str(payload.get("visibility_mode") or "").strip()
@@ -186,15 +240,49 @@ class ImportFlowService:
             "visibility_mode": visibility_mode,
         }
 
-    # ── Step 3: Push to store / 步骤 3：推送到店铺 ──
+    # ══════════════════════════════════════════════════════════════
+    #  Step 3: Push — single, batch, multi-store
+    #  步骤 3：推送 —— 单条、批量、多店铺
+    # ══════════════════════════════════════════════════════════════
 
     async def confirm_push_to_store(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Final confirmation: validate push options → delegate to provider.commit
-        → persist result. This is the only step with real side effects.
+        Unified entry point for single, batch, and multi-store push.
+        单条、批量、多店铺推送的统一入口。
 
-        最终确认：校验推送选项 → 委托给 provider.commit → 持久化结果。
-        这是唯一具有真实副作用的步骤。
+        Modes:
+          - job_id (str)               → single push (backward-compatible)
+          - job_ids (list)             → batch push
+          - target_stores (list)       → one job to N stores
+          - job_ids + target_stores    → N jobs x M stores (cartesian)
+
+        模式：
+          - job_id（字符串）           → 单条推送（向后兼容）
+          - job_ids（列表）            → 批量推送
+          - target_stores（列表）      → 一个 job 推 N 个店铺
+          - job_ids + target_stores    → N 个 job x M 个店铺（笛卡尔积）
+        """
+        job_ids = payload.get("job_ids")
+        target_stores = payload.get("target_stores")
+
+        # Batch mode: job_ids is a list.
+        # 批量模式：job_ids 是列表。
+        if isinstance(job_ids, list):
+            return await self._batch_push(payload, job_ids)
+
+        # Single job_id, but possibly multi-store.
+        # 单条 job_id，但可能多店铺。
+        if isinstance(target_stores, list) and len(target_stores) > 0:
+            return await self._multi_store_push_single_job(payload, target_stores)
+
+        # Pure single mode (original behaviour).
+        # 纯单条模式（原始行为）。
+        return await self._push_single(payload)
+
+    async def _push_single(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Original single-item push pipeline (fully backward-compatible).
+        原始单条推送流水线（完全向后兼容）。
         """
         job_id = str(payload.get("job_id") or "").strip()
         if not job_id:
@@ -241,7 +329,107 @@ class ImportFlowService:
             "warnings": list(push_option_check.get("warnings") or []) + list(result.get("warnings", [])),
         }
 
-    # ── Status query / 状态查询 ──
+    async def _multi_store_push_single_job(self, payload: Dict[str, Any], target_stores: List[str]) -> Dict[str, Any]:
+        """
+        Push a single job_id to multiple stores.
+        将一个 job_id 推送到多个店铺。
+        """
+        batch_id = f"batch-{_uuid.uuid4().hex[:12]}"
+        job_id = str(payload.get("job_id") or "").strip()
+        if not job_id:
+            return {"error": "job_id is required when using target_stores / 使用 target_stores 时需要提供 job_id"}
+
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+        failed = 0
+
+        for store in target_stores:
+            store_name = str(store).strip()
+            if not store_name:
+                results.append({"job_id": job_id, "target_store": "", "error": "Empty store name / 空店铺名称"})
+                failed += 1
+                continue
+            single_payload = dict(payload)
+            single_payload["job_id"] = job_id
+            single_payload["target_store"] = store_name
+            single_payload.pop("target_stores", None)
+            try:
+                result = await self._push_single(single_payload)
+                result["target_store"] = store_name
+                results.append(result)
+                succeeded += 1
+            except Exception as exc:
+                results.append({"job_id": job_id, "target_store": store_name, "error": str(exc)})
+                failed += 1
+
+        return {
+            "batch_id": batch_id,
+            "total": len(target_stores),
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+
+    async def _batch_push(self, payload: Dict[str, Any], job_ids: List[Any]) -> Dict[str, Any]:
+        """
+        Batch push: iterate over job_ids, expand multi-store combinations.
+        Each item in job_ids can be a plain string or an object with per-item overrides.
+
+        批量推送：遍历 job_ids，展开多店铺组合。
+        job_ids 中每项可以是纯字符串或带单条覆盖的对象。
+        """
+        if not job_ids:
+            return {"error": "job_ids must be a non-empty list / job_ids 不能为空列表"}
+
+        batch_id = f"batch-{_uuid.uuid4().hex[:12]}"
+        batch_target_stores = payload.get("target_stores")
+        batch_target_store = payload.get("target_store")
+        batch_visibility = payload.get("visibility_mode")
+        batch_push_options = payload.get("push_options")
+
+        # Build the (job_id, store, push_options) task list.
+        # 构建 (job_id, store, push_options) 任务列表。
+        tasks = _expand_push_tasks(
+            job_ids,
+            batch_target_stores=batch_target_stores,
+            batch_target_store=batch_target_store,
+            batch_visibility=batch_visibility,
+            batch_push_options=batch_push_options,
+        )
+
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+        failed = 0
+
+        for task in tasks:
+            if task.get("error"):
+                results.append(task)
+                failed += 1
+                continue
+            try:
+                result = await self._push_single(task["payload"])
+                result["target_store"] = task["target_store"]
+                results.append(result)
+                succeeded += 1
+            except Exception as exc:
+                results.append({
+                    "job_id": task.get("job_id", ""),
+                    "target_store": task.get("target_store", ""),
+                    "error": str(exc),
+                })
+                failed += 1
+
+        return {
+            "batch_id": batch_id,
+            "total": len(tasks),
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+
+    # ══════════════════════════════════════════════════════════════
+    #  Status & preview / 状态查询和预览
+    # ══════════════════════════════════════════════════════════════
 
     async def get_job_status(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -262,8 +450,6 @@ class ImportFlowService:
             "warnings": list(job.get("warnings", [])) + list(job.get("push_option_warnings", [])),
             "has_push_result": bool(job.get("push_result")),
         }
-
-    # ── Preview builder / 预览构建 ──
 
     def _preview(self, job: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -311,6 +497,140 @@ class ImportFlowService:
 # ──────────────────────────────────────────────────────────────
 #  Module-level helpers / 模块级辅助函数
 # ──────────────────────────────────────────────────────────────
+
+def _parse_batch_item(
+    item: Any,
+    shared: Dict[str, Any],
+    shared_rules: Any,
+) -> tuple:
+    """
+    Parse one element from source_urls into (url, payload_dict).
+    Each item can be a plain URL string or a dict with per-item overrides.
+
+    解析 source_urls 中的一个元素为 (url, payload_dict)。
+    每项可以是纯 URL 字符串或带单条覆盖的字典。
+    """
+    if isinstance(item, str):
+        url = item.strip()
+        if not url:
+            return "", {}
+        merged = dict(shared)
+        merged["source_url"] = url
+        if shared_rules:
+            merged.setdefault("rules", shared_rules)
+        return url, merged
+
+    if isinstance(item, dict):
+        url = str(item.get("url") or item.get("source_url") or "").strip()
+        if not url:
+            return "", {}
+        merged = dict(shared)
+        merged["source_url"] = url
+        for key in ("source_hint", "country", "target_store", "visibility_mode"):
+            if item.get(key) is not None:
+                merged[key] = item[key]
+        merged["rules"] = item.get("rules") or shared_rules or {}
+        return url, merged
+
+    return "", {}
+
+
+def _expand_push_tasks(
+    job_ids: List[Any],
+    batch_target_stores: Any,
+    batch_target_store: Any,
+    batch_visibility: Any,
+    batch_push_options: Any,
+) -> List[Dict[str, Any]]:
+    """
+    Expand job_ids (possibly with per-item overrides) and target_stores
+    into a flat list of push tasks. Each task is either:
+      {"payload": {...}, "job_id": ..., "target_store": ...}   (valid)
+      {"job_id": ..., "target_store": ..., "error": ...}       (skip)
+
+    将 job_ids（可能带单条覆盖）和 target_stores 展开为扁平的推送任务列表。
+    """
+    tasks: List[Dict[str, Any]] = []
+
+    for item in job_ids:
+        job_id, item_stores, item_push_options, item_visibility = _parse_push_item(
+            item, batch_target_stores, batch_target_store, batch_visibility, batch_push_options,
+        )
+
+        if not job_id:
+            tasks.append({"job_id": "", "target_store": "", "error": "Empty or invalid job_id entry / 空或无效的 job_id 条目"})
+            continue
+
+        if not item_stores:
+            # No explicit stores → single push with whatever target_store resolves to.
+            # 没有明确指定店铺 → 使用解析出的 target_store 进行单次推送。
+            payload: Dict[str, Any] = {"job_id": job_id}
+            if item_push_options is not None:
+                payload["push_options"] = item_push_options
+            if item_visibility:
+                payload["visibility_mode"] = item_visibility
+            tasks.append({"payload": payload, "job_id": job_id, "target_store": ""})
+            continue
+
+        for store in item_stores:
+            store_name = str(store).strip()
+            if not store_name:
+                tasks.append({"job_id": job_id, "target_store": "", "error": "Empty store name / 空店铺名称"})
+                continue
+            payload = {"job_id": job_id, "target_store": store_name}
+            if item_push_options is not None:
+                payload["push_options"] = item_push_options
+            if item_visibility:
+                payload["visibility_mode"] = item_visibility
+            tasks.append({"payload": payload, "job_id": job_id, "target_store": store_name})
+
+    return tasks
+
+
+def _parse_push_item(
+    item: Any,
+    batch_target_stores: Any,
+    batch_target_store: Any,
+    batch_visibility: Any,
+    batch_push_options: Any,
+) -> tuple:
+    """
+    Parse one element from job_ids into (job_id, stores_list, push_options, visibility).
+    Per-item values override batch-level values.
+
+    解析 job_ids 中的一个元素为 (job_id, stores_list, push_options, visibility)。
+    单条值覆盖批次级值。
+    """
+    if isinstance(item, str):
+        job_id = item.strip()
+        stores = list(batch_target_stores) if isinstance(batch_target_stores, list) else (
+            [batch_target_store] if batch_target_store else []
+        )
+        return job_id, stores, batch_push_options, batch_visibility
+
+    if isinstance(item, dict):
+        job_id = str(item.get("job_id") or "").strip()
+        # Per-item stores: target_stores > target_store > batch fallback.
+        # 单条店铺优先级：target_stores > target_store > 批次级回退。
+        item_target_stores = item.get("target_stores")
+        item_target_store = item.get("target_store")
+        if isinstance(item_target_stores, list) and item_target_stores:
+            stores = item_target_stores
+        elif item_target_store:
+            stores = [item_target_store]
+        elif isinstance(batch_target_stores, list) and batch_target_stores:
+            stores = list(batch_target_stores)
+        elif batch_target_store:
+            stores = [batch_target_store]
+        else:
+            stores = []
+
+        push_options = item.get("push_options") if item.get("push_options") is not None else batch_push_options
+        visibility = item.get("visibility_mode") or batch_visibility
+        return job_id, stores, push_options, visibility
+
+    return "", [], batch_push_options, batch_visibility
+
 
 def _price_range(draft: Dict[str, Any]) -> Dict[str, Optional[float]]:
     """

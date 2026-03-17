@@ -3,23 +3,23 @@
 Dropship Import MCP Server — Entry point for the product import workflow.
 代发货导入 MCP 服务器 —— 商品导入工作流的入口点
 
-Registers seven MCP tools that cover the complete import lifecycle:
-  1. get_rule_capabilities   — discover provider features
-  2. validate_rules          — dry-run rule validation
-  3. prepare_import_candidate — import + preview
-  4. get_import_preview      — reload a saved preview
-  5. set_product_visibility  — toggle draft / live
-  6. confirm_push_to_store   — push to store (side-effect)
-  7. get_job_status           — poll job state
+Registers seven MCP tools covering single, batch, and multi-store workflows:
+  1. get_rule_capabilities    — discover provider features
+  2. validate_rules           — dry-run rule validation
+  3. prepare_import_candidate — import single URL or batch of URLs
+  4. get_import_preview       — reload a saved preview
+  5. set_product_visibility   — toggle draft / live
+  6. confirm_push_to_store    — push single/batch/multi-store
+  7. get_job_status            — poll job state
 
-注册七个 MCP 工具，覆盖完整的导入生命周期：
-  1. get_rule_capabilities   — 发现提供者功能
-  2. validate_rules          — 规则校验试运行
-  3. prepare_import_candidate — 导入 + 预览
-  4. get_import_preview      — 重新加载已保存的预览
-  5. set_product_visibility  — 切换草稿 / 上架
-  6. confirm_push_to_store   — 推送到店铺（有副作用）
-  7. get_job_status           — 查询任务状态
+注册七个 MCP 工具，覆盖单条、批量和多店铺工作流：
+  1. get_rule_capabilities    — 发现提供者功能
+  2. validate_rules           — 规则校验试运行
+  3. prepare_import_candidate — 导入单条或批量 URL
+  4. get_import_preview       — 重新加载已保存的预览
+  5. set_product_visibility   — 切换草稿 / 上架
+  6. confirm_push_to_store    — 单条/批量/多店铺推送
+  7. get_job_status            — 查询任务状态
 """
 from __future__ import annotations
 
@@ -59,8 +59,6 @@ def _reply_json(data: Any) -> list[TextContent]:
 
 # ──────────────────────────────────────────────────────────────
 #  Tool definitions / 工具定义
-#  Each Tool maps 1:1 to an ImportFlowService method.
-#  每个 Tool 与 ImportFlowService 的一个方法一一对应。
 # ──────────────────────────────────────────────────────────────
 
 TOOLS = [
@@ -92,21 +90,34 @@ TOOLS = [
     ),
     Tool(
         name="prepare_import_candidate",
-        description="Resolve a source URL, prepare an import candidate, apply structured rules, and return a preview bundle.",
+        description=(
+            "Import products from supplier URLs and return preview bundles. "
+            "Supports single mode (source_url) and batch mode (source_urls). "
+            "In batch mode, each URL is processed independently — failures do not block other items."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "source_url": {"type": "string", "description": "Source product URL"},
+                "source_url": {"type": "string", "description": "Single source product URL (single mode)"},
+                "source_urls": {
+                    "type": "array",
+                    "description": (
+                        "Batch mode: list of URLs to import. Each item can be a plain URL string "
+                        "or an object {url, source_hint?, country?, target_store?, rules?} for per-item overrides. "
+                        "When present, source_url is ignored."
+                    ),
+                    "items": {},
+                },
                 "source_hint": {"type": "string", "description": "Optional source hint: auto, aliexpress, accio"},
                 "country": {"type": "string", "description": "Target country code such as US"},
                 "target_store": {"type": "string", "description": "Optional store ref or display name"},
                 "visibility_mode": {"type": "string", "description": "backend_only or sell_immediately"},
                 "rules": {
                     "type": "object",
-                    "description": "Structured rule object with pricing, content, images, and optional instruction_text.",
+                    "description": "Shared rules applied to all items (can be overridden per-item in batch mode).",
                 },
             },
-            "required": ["source_url"],
+            "required": [],
         },
     ),
     Tool(
@@ -132,19 +143,39 @@ TOOLS = [
     ),
     Tool(
         name="confirm_push_to_store",
-        description="Commit the prepared draft to the provider and request a store push after explicit confirmation.",
+        description=(
+            "Push prepared drafts to store(s). Supports three modes: "
+            "(1) Single: job_id + target_store; "
+            "(2) Batch: job_ids list, each processed independently; "
+            "(3) Multi-store: target_stores list, one job pushed to N stores. "
+            "Batch + multi-store combines as N jobs x M stores."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "job_id": {"type": "string", "description": "Prepared job id"},
-                "target_store": {"type": "string", "description": "Optional override for the target store"},
-                "visibility_mode": {"type": "string", "description": "Optional override for backend_only or sell_immediately"},
+                "job_id": {"type": "string", "description": "Single job id (single mode)"},
+                "job_ids": {
+                    "type": "array",
+                    "description": (
+                        "Batch mode: list of job IDs. Each item can be a plain string "
+                        "or an object {job_id, target_store?, target_stores?, push_options?, visibility_mode?} "
+                        "for per-item overrides. When present, job_id is ignored."
+                    ),
+                    "items": {},
+                },
+                "target_store": {"type": "string", "description": "Target store (shared across all items)"},
+                "target_stores": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Push to multiple stores. Each job is pushed to every store in this list.",
+                },
+                "visibility_mode": {"type": "string", "description": "backend_only or sell_immediately"},
                 "push_options": {
                     "type": "object",
-                    "description": "Optional provider-neutral publish settings such as publish_to_online_store, pricing_rule_behavior, image_strategy, and sales_channels.",
+                    "description": "Provider-neutral publish settings (shared, can be overridden per-item).",
                 },
             },
-            "required": ["job_id"],
+            "required": [],
         },
     ),
     Tool(
