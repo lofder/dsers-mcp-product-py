@@ -17,7 +17,7 @@ This guide is for **end users** — how to install, configure, and use this MCP 
 | Item | Requirement |
 |------|-------------|
 | Python | 3.10 or higher |
-| DSers account | Registered, with at least one Shopify store linked |
+| DSers account | Registered, with at least one store linked (Shopify, Wix, or WooCommerce) |
 | MCP client | Cursor IDE, Claude Desktop, or any MCP-compatible AI client |
 
 ---
@@ -52,14 +52,14 @@ Open `.env` in a text editor and fill in:
 ```ini
 DSERS_EMAIL=your-dsers-email
 DSERS_PASSWORD=your-dsers-password
-DSERS_ENV=test
+DSERS_ENV=production
 ```
 
 | Variable | Description |
 |----------|-------------|
 | `DSERS_EMAIL` | DSers login email |
 | `DSERS_PASSWORD` | DSers login password |
-| `DSERS_ENV` | `test` = test environment, `production` = production environment |
+| `DSERS_ENV` | `production` (default) or `test` |
 
 > **Security note**: `.env` is excluded by `.gitignore` and will never be committed to Git.
 
@@ -142,16 +142,30 @@ The Agent will automatically:
 
 The Agent will only proceed to the preview step and wait for your confirmation.
 
-#### 5.3 Batch Operations
+#### 5.3 Batch Import and Push
 
-> **You say**: Import all 3 products below to my store, mark up 80%  
-> - https://...  
-> - https://...  
-> - https://...
+> **You say**: Import all 5 links below to my store, mark up 80%, all to backend  
+> - https://aliexpress.com/item/111.html  
+> - https://aliexpress.com/item/222.html  
+> - https://aliexpress.com/item/333.html  
+> - https://1688.com/offer/444.html  
+> - https://aliexpress.com/item/555.html
 
-The Agent will import and push them sequentially (serial execution in current version).
+The Agent will batch-import all URLs in a single call, then batch-push all valid results. Invalid URLs are reported per-item without blocking others. Mixed sources (AliExpress + 1688) are supported.
 
-#### 5.4 Specify Push Options
+#### 5.4 Multi-Store Push
+
+> **You say**: Push this product to both my Shopify store and my Wix store
+
+The Agent will push the same product to multiple stores in one call using `target_stores`.
+
+#### 5.5 Choose Shipping Profile (Shopify)
+
+> **You say**: Push this product using the "General profile" shipping profile
+
+For Shopify stores, the system auto-discovers available delivery profiles. By default it uses the one marked as default in DSers. You can specify a different one by name.
+
+#### 5.6 Specify Push Options
 
 > **You say**: Push this product but don't list it on the storefront, keep it as a draft, and enable auto inventory sync
 
@@ -174,6 +188,7 @@ Use these keywords in conversation and the Agent will map them to push options:
 | "use store pricing rule" | `pricing_rule_behavior` | `apply_store_pricing_rule` |
 | "auto sync inventory" | `auto_inventory_update` | `true` |
 | "auto sync price" | `auto_price_update` | `true` |
+| "use General profile" | `shipping_profile_name` | `"General profile"` |
 
 ---
 
@@ -212,21 +227,11 @@ You can specify rules in natural language during import. The Agent converts them
 
 **Cause**: The target Shopify store requires a Delivery Profile binding.
 
-**Solution**: Tell the Agent to provide store_shipping_profile, or find the Delivery Profile info from DSers web UI and provide it to the Agent:
+**Solution**: This is now handled automatically. The system discovers the correct Shopify delivery profile via a dedicated API and attaches it to the push request. If you see this error:
 
-```json
-{
-  "store_shipping_profile": [
-    {
-      "storeId": "your-store-id",
-      "locationId": "gid://shopify/DeliveryLocationGroup/xxx",
-      "profileId": "gid://shopify/DeliveryProfile/xxx"
-    }
-  ]
-}
-```
-
-The system automatically tries to fetch this via API. Manual input is only needed when the API returns empty.
+1. Check `get_rule_capabilities` — it shows available shipping profiles for each Shopify store
+2. Try specifying a profile by name: tell the Agent to use `shipping_profile_name: "DSers Shipping Profile"` (or whichever profile is listed)
+3. Make sure the Shopify store has at least one Delivery Profile configured in DSers web UI (Settings > Shipping)
 
 #### Q: Invalid credentials / login failed
 
@@ -254,8 +259,8 @@ Then restart the MCP server.
 
 Currently supported:
 - **AliExpress** — full support
-- **Alibaba (1688)** — basic support
-- **Accio** — basic support
+- **Alibaba** — supported
+- **1688** — supported
 
 #### Q: How to use a different platform instead of DSers
 
@@ -297,7 +302,7 @@ When you encounter issues, check in this order:
 | 项目 | 要求 |
 |------|------|
 | Python | 3.10 或更高版本 |
-| DSers 账号 | 已注册，且绑定了至少一个 Shopify 店铺 |
+| DSers 账号 | 已注册，且绑定了至少一个店铺（Shopify、Wix 或 WooCommerce） |
 | MCP 客户端 | Cursor IDE、Claude Desktop 或其他支持 MCP 的 AI 客户端 |
 
 ---
@@ -332,14 +337,14 @@ cp .env.example .env
 ```ini
 DSERS_EMAIL=你的DSers邮箱
 DSERS_PASSWORD=你的DSers密码
-DSERS_ENV=test
+DSERS_ENV=production
 ```
 
 | 变量 | 说明 |
 |------|------|
 | `DSERS_EMAIL` | DSers 登录邮箱 |
 | `DSERS_PASSWORD` | DSers 登录密码 |
-| `DSERS_ENV` | `test` = 测试环境，`production` = 生产环境 |
+| `DSERS_ENV` | `production`（默认）或 `test` |
 
 > **安全提示**：`.env` 文件已被 `.gitignore` 排除，不会被提交到 Git。
 
@@ -422,16 +427,30 @@ Agent 会自动执行以下流程：
 
 Agent 只会执行到预览步骤，等待你确认后才推送。
 
-#### 5.3 批量操作
+#### 5.3 批量导入和推送
 
-> **你说**：把以下 3 个链接的商品都导入到我的店铺，统一加价 80%
-> - https://...
-> - https://...
-> - https://...
+> **你说**：把以下 5 个链接的商品都导入到我的店铺，统一加价 80%，先放后台
+> - https://aliexpress.com/item/111.html
+> - https://aliexpress.com/item/222.html
+> - https://aliexpress.com/item/333.html
+> - https://1688.com/offer/444.html
+> - https://aliexpress.com/item/555.html
 
-Agent 会逐个导入并推送（当前版本为串行执行）。
+Agent 会一次调用批量导入所有 URL，然后批量推送所有有效结果。无效 URL 会在对应条目中报告，不影响其他条目。支持混合来源（速卖通 + 1688）。
 
-#### 5.4 指定推送选项
+#### 5.4 多店铺推送
+
+> **你说**：把这个商品同时推送到我的 Shopify 店铺和 Wix 店铺
+
+Agent 会使用 `target_stores` 一次调用推送到多个店铺。
+
+#### 5.5 指定运费模板（Shopify）
+
+> **你说**：推送这个商品，使用 "General profile" 运费模板
+
+对于 Shopify 店铺，系统会自动发现可用的 delivery profile。默认使用 DSers 中标记为默认的 profile。你可以按名称指定使用其他 profile。
+
+#### 5.6 指定推送选项
 
 > **你说**：推送这个商品，但是先不要上架到前端，只在后台显示，同时开启自动同步库存
 
@@ -454,6 +473,7 @@ Agent 会将对应的 push_options 设置为：
 | "用店铺定价规则" | `pricing_rule_behavior` | `apply_store_pricing_rule` |
 | "自动同步库存" | `auto_inventory_update` | `true` |
 | "自动同步价格" | `auto_price_update` | `true` |
+| "用 General profile" | `shipping_profile_name` | `"General profile"` |
 
 ---
 
@@ -492,21 +512,11 @@ Agent 会将对应的 push_options 设置为：
 
 **原因**：目标 Shopify 店铺需要 Delivery Profile 绑定。
 
-**解决**：在推送时告诉 Agent 提供 store_shipping_profile，或者在 DSers 网页端找到对应的 Delivery Profile 信息后提供给 Agent。格式如下：
+**解决**：现在已自动处理。系统通过专用 API 发现正确的 Shopify delivery profile 并附加到推送请求中。如果仍然看到此错误：
 
-```json
-{
-  "store_shipping_profile": [
-    {
-      "storeId": "你的店铺ID",
-      "locationId": "gid://shopify/DeliveryLocationGroup/xxx",
-      "profileId": "gid://shopify/DeliveryProfile/xxx"
-    }
-  ]
-}
-```
-
-系统会自动尝试通过 API 获取这些信息。只有 API 返回空时才需要手动提供。
+1. 检查 `get_rule_capabilities` — 它会显示每个 Shopify 店铺的可用运费模板
+2. 尝试按名称指定：告诉 Agent 使用 `shipping_profile_name: "DSers Shipping Profile"`（或列表中的其他 profile）
+3. 确保 Shopify 店铺在 DSers 网页端已配置至少一个 Delivery Profile（设置 > 运费）
 
 #### Q: 提示凭据无效 / 登录失败
 
@@ -533,9 +543,9 @@ DSERS_ENV=production
 #### Q: 是否支持 AliExpress 以外的供应商
 
 当前支持：
-- **AliExpress** — 完整支持
-- **Alibaba (1688)** — 基本支持
-- **Accio** — 基本支持
+- **AliExpress（速卖通）** — 完整支持
+- **Alibaba** — 支持
+- **1688** — 支持
 
 #### Q: 如何不使用 DSers，换成其他平台
 

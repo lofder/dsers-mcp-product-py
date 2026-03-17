@@ -124,12 +124,12 @@ Agent                              MCP Server
 
 | Tool | Description | Required Params |
 |------|-------------|-----------------|
-| `get_rule_capabilities` | Query provider's rule families and push options | — |
+| `get_rule_capabilities` | Query stores (with Shopify shipping profiles), rule families, push options | — |
 | `validate_rules` | Validate rule structure, return normalized object | `rules` |
-| `prepare_import_candidate` | Import from supplier URL and generate preview | `source_url` |
+| `prepare_import_candidate` | Import from URL(s) — single (`source_url`) or batch (`source_urls`) | `source_url` or `source_urls` |
 | `get_import_preview` | View prepared job preview | `job_id` |
 | `set_product_visibility` | Change visibility (backend_only / sell_immediately) | `job_id`, `visibility_mode` |
-| `confirm_push_to_store` | Confirm push to target store | `job_id` |
+| `confirm_push_to_store` | Push to store(s) — single, batch (`job_ids`), or multi-store (`target_stores`) | `job_id` or `job_ids` |
 | `get_job_status` | Query push status | `job_id` |
 
 ---
@@ -178,12 +178,16 @@ subsequent → Bearer {session_id} header
 
 `PrivateDsersProvider.__init__()` adds `vendor-dsers/` to `sys.path`, then uses `importlib` to dynamically load each business module's `register()` function to obtain handlers.
 
-#### 6.3 Shipping Profile Auto-Attach
+#### 6.3 Shipping Profile Auto-Discovery
 
-During push, Shopify Delivery Profile is handled automatically:
-1. First tries API query via `dsers_get_store_shipping_profile`
-2. Falls back to `push_options.store_shipping_profile` if API returns empty
-3. Issues a warning if neither is available (push may fail with "shipping profile not found")
+During push to Shopify stores, the Delivery Profile is handled automatically:
+1. Calls `GET /import-list/shopify/shipping-profile/get` to fetch all Shopify delivery profiles
+2. Picks the profile with `isChecked=true` (the default configured in DSers web UI)
+3. If `push_options.shipping_profile_name` is specified, matches by name instead
+4. Falls back to `push_options.store_shipping_profile` for manual override
+5. Non-Shopify stores (Wix, WooCommerce) skip this step entirely
+
+`get_rule_capabilities` also returns `shipping_profiles` for each Shopify store (name, is_default, countries, rate) so agents can display available profiles to the user.
 
 ---
 
@@ -198,7 +202,8 @@ During push, Shopify Delivery Profile is handled automatically:
 | `auto_inventory_update` | `bool` | Auto-sync inventory |
 | `auto_price_update` | `bool` | Auto-sync price |
 | `sales_channels` | `list` | Sales channel identifiers |
-| `store_shipping_profile` | `list` | Platform delivery profile bindings (fallback) |
+| `shipping_profile_name` | `str` | Shopify delivery profile name — auto-picks default if omitted |
+| `store_shipping_profile` | `list` | Manual override: raw delivery profile bindings (rarely needed) |
 
 ---
 
@@ -257,12 +262,15 @@ Cursor MCP config:
 
 | Status | Description |
 |--------|-------------|
-| ⚠️ Current | Test environment API (`DSERS_ENV=test`) |
-| ⚠️ Current | `store_shipping_profile` API returns empty in some environments, requires push_options fallback |
-| 🔜 Next | Switch to production API |
+| ✅ Done | Production API (`DSERS_ENV=production` default) |
+| ✅ Done | Batch import and batch push support |
+| ✅ Done | Multi-store push (1 product x N stores) |
+| ✅ Done | Shopify shipping profile auto-discovery via dedicated API |
+| ✅ Done | Multi-platform targets: Shopify, Wix, WooCommerce |
+| ✅ Done | Multi-source: AliExpress, Alibaba, 1688 |
 | 🔜 Next | Support additional platform providers (non-DSers) |
-| 🔜 Next | Batch import support |
 | 🔜 Next | Tag editing in rules engine |
+| 🔜 Next | AliExpress bundle URL support |
 
 ---
 ---
@@ -387,12 +395,12 @@ Agent                              MCP Server
 
 | 工具名 | 说明 | 必需参数 |
 |--------|------|----------|
-| `get_rule_capabilities` | 查询当前 Provider 支持的规则族和推送选项 | — |
+| `get_rule_capabilities` | 查询店铺（含 Shopify 运费模板）、规则族、推送选项 | — |
 | `validate_rules` | 校验规则结构，返回归一化后的规则对象 | `rules` |
-| `prepare_import_candidate` | 从供应商 URL 导入并生成预览 | `source_url` |
+| `prepare_import_candidate` | 从 URL 导入——单条（`source_url`）或批量（`source_urls`） | `source_url` 或 `source_urls` |
 | `get_import_preview` | 查看已准备的作业预览 | `job_id` |
 | `set_product_visibility` | 修改可见性 (backend_only / sell_immediately) | `job_id`, `visibility_mode` |
-| `confirm_push_to_store` | 确认推送到目标店铺 | `job_id` |
+| `confirm_push_to_store` | 推送到店铺——单条、批量（`job_ids`）或多店铺（`target_stores`） | `job_id` 或 `job_ids` |
 | `get_job_status` | 查询推送状态 | `job_id` |
 
 ---
@@ -441,12 +449,16 @@ DSersClient.__init__() → 尝试从 session_file 恢复
 
 `PrivateDsersProvider.__init__()` 将 `vendor-dsers/` 加入 `sys.path`，然后通过 `importlib` 动态加载各业务模块的 `register()` 函数获取 handler。
 
-#### 6.3 Shipping Profile 自动附加
+#### 6.3 Shipping Profile 自动发现
 
-推送时自动处理 Shopify Delivery Profile：
-1. 先尝试 API 查询 `dsers_get_store_shipping_profile`
-2. API 返回空则回退到 `push_options.store_shipping_profile`
-3. 均无则发出警告（推送可能因 "shipping profile not found" 失败）
+推送到 Shopify 店铺时，自动处理 Delivery Profile：
+1. 调用 `GET /import-list/shopify/shipping-profile/get` 获取所有 Shopify delivery profiles
+2. 选取 `isChecked=true` 的 profile（即 DSers 网页端默认选中的）
+3. 如果指定了 `push_options.shipping_profile_name`，则按名称匹配
+4. 回退到 `push_options.store_shipping_profile` 手动覆盖
+5. 非 Shopify 店铺（Wix、WooCommerce）完全跳过此步骤
+
+`get_rule_capabilities` 也会为每个 Shopify 店铺返回 `shipping_profiles`（名称、是否默认、覆盖国家数、运费），供 Agent 展示给用户选择。
 
 ---
 
@@ -461,7 +473,8 @@ DSersClient.__init__() → 尝试从 session_file 恢复
 | `auto_inventory_update` | `bool` | 自动同步库存 |
 | `auto_price_update` | `bool` | 自动同步价格 |
 | `sales_channels` | `list` | 销售渠道列表 |
-| `store_shipping_profile` | `list` | 平台 Delivery Profile 绑定 (fallback) |
+| `shipping_profile_name` | `str` | Shopify 运费模板名称——不指定则自动使用默认模板 |
+| `store_shipping_profile` | `list` | 手动覆盖：原始 delivery profile 绑定（极少需要） |
 
 ---
 
@@ -520,9 +533,12 @@ python server.py
 
 | 状态 | 说明 |
 |------|------|
-| ⚠️ 当前 | 测试环境 API 地址 (`DSERS_ENV=test`) |
-| ⚠️ 当前 | `store_shipping_profile` API 在部分环境返回空，需 push_options fallback |
-| 🔜 后续 | 切换到生产 API |
+| ✅ 已完成 | 生产环境 API（`DSERS_ENV=production` 默认） |
+| ✅ 已完成 | 批量导入和批量推送 |
+| ✅ 已完成 | 多店铺推送（1 个商品 x N 个店铺） |
+| ✅ 已完成 | Shopify 运费模板自动发现（专用 API） |
+| ✅ 已完成 | 多平台目标：Shopify、Wix、WooCommerce |
+| ✅ 已完成 | 多来源：AliExpress、Alibaba、1688 |
 | 🔜 后续 | 支持更多平台 Provider（非 DSers） |
-| 🔜 后续 | 支持批量导入 |
 | 🔜 后续 | 规则引擎增加 tag 编辑支持 |
+| 🔜 后续 | AliExpress Bundle URL 支持 |

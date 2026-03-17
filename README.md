@@ -8,33 +8,40 @@
 
 ## English
 
-An MCP server for dropshipping product import, built on [Model Context Protocol](https://modelcontextprotocol.io/). AI Agents use 7 high-level tools to complete the full workflow from supplier URL to store listing.
+An MCP server for dropshipping product import, built on [Model Context Protocol](https://modelcontextprotocol.io/). AI Agents use 7 high-level tools to complete the full workflow from supplier URL to store listing — single or batch, one store or many.
 
 ### Documentation
 
 | Document | Content |
 |----------|---------|
-| [USAGE.md — User Guide](USAGE.md) | Installation, client setup, usage examples, FAQ |
+| [USAGE.md — User Guide](USAGE.md) | Installation, client setup, usage examples, scenario prompts, FAQ |
 | [ARCHITECTURE.md — Technical Architecture](ARCHITECTURE.md) | Three-layer architecture, tool flow, provider extension |
-| [SKILL.md — Agent Skill Guide](SKILL.md) | Tool reference, parameter formats, push options |
+| [SKILL.md — Agent Skill Guide](SKILL.md) | Tool reference, parameter formats, push options, scenario prompts |
 
 ### Core Tools
 
 | Tool | Description |
 |------|-------------|
-| `get_rule_capabilities` | Query supported rule families, stores, and push options |
+| `get_rule_capabilities` | Query supported stores (with Shopify shipping profiles), rule families, and push options |
 | `validate_rules` | Validate and normalize a rule object |
-| `prepare_import_candidate` | Resolve URL → import → apply rules → return preview |
+| `prepare_import_candidate` | Import from supplier URL(s) — single or batch — apply rules, return preview(s) |
 | `get_import_preview` | View prepared draft preview |
 | `set_product_visibility` | Adjust visibility (backend_only / sell_immediately) |
-| `confirm_push_to_store` | Confirm push to target store |
+| `confirm_push_to_store` | Push to store(s) — single, batch, or multi-store |
 | `get_job_status` | Query final push status |
+
+### Supported Platforms
+
+| Type | Platforms |
+|------|-----------|
+| **Source (import from)** | AliExpress, Alibaba, 1688 |
+| **Target (push to)** | Shopify, Wix, WooCommerce (via DSers) |
 
 ### Quick Start
 
 ```bash
 # 1. Clone and install
-git clone <repo-url> && cd dropship-import-mcp
+git clone https://github.com/lofder/dsers-dropship-mcp.git && cd dsers-dropship-mcp
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -70,7 +77,7 @@ dropship-import-mcp/
 |----------|----------|-------------|
 | `DSERS_EMAIL` | Yes | DSers account email |
 | `DSERS_PASSWORD` | Yes | DSers account password |
-| `DSERS_ENV` | No | `test` or `production` (default: `test`) |
+| `DSERS_ENV` | No | `production` (default) or `test` |
 | `IMPORT_PROVIDER_MODULE` | No | Provider module path (default: `dsers_provider.provider`) |
 | `IMPORT_MCP_STATE_DIR` | No | Job state directory (default: `.state`) |
 
@@ -86,7 +93,8 @@ See `.env.example` for the full list.
 | `auto_inventory_update` | bool | Auto-sync inventory |
 | `auto_price_update` | bool | Auto-sync price |
 | `sales_channels` | list | Sales channel identifiers |
-| `store_shipping_profile` | list | Platform delivery profile bindings (fallback) |
+| `shipping_profile_name` | string | Shopify delivery profile name — if omitted, the default profile is used automatically |
+| `store_shipping_profile` | list | Manual override: raw delivery profile bindings (rarely needed) |
 
 ### Provider Extension
 
@@ -108,33 +116,40 @@ MIT
 
 ## 中文
 
-基于 [Model Context Protocol](https://modelcontextprotocol.io/) 的一件代发商品导入服务。AI Agent 通过 7 个高层工具，完成从供应商 URL 到店铺上架的全过程。
+基于 [Model Context Protocol](https://modelcontextprotocol.io/) 的一件代发商品导入服务。AI Agent 通过 7 个高层工具，完成从供应商 URL 到店铺上架的全过程——支持单条或批量，单店或多店。
 
 ### 文档导航
 
 | 文档 | 内容 |
 |------|------|
-| [USAGE.md — 使用指南](USAGE.md) | 安装配置、接入客户端、使用方式、常见问题 |
+| [USAGE.md — 使用指南](USAGE.md) | 安装配置、接入客户端、使用方式、场景提示词、常见问题 |
 | [ARCHITECTURE.md — 技术架构](ARCHITECTURE.md) | 三层架构、工具流程、Provider 扩展、DSers 适配层详解 |
-| [SKILL.md — Agent Skill](SKILL.md) | AI Agent 工具参考、参数格式、Push Options |
+| [SKILL.md — Agent Skill](SKILL.md) | AI Agent 工具参考、参数格式、Push Options、场景提示词 |
 
 ### 核心工具
 
 | 工具 | 说明 |
 |------|------|
-| `get_rule_capabilities` | 查询支持的规则族、店铺、推送选项 |
+| `get_rule_capabilities` | 查询支持的店铺（含 Shopify 运费模板）、规则族、推送选项 |
 | `validate_rules` | 校验并归一化规则对象 |
-| `prepare_import_candidate` | 解析 URL → 导入 → 应用规则 → 返回预览 |
+| `prepare_import_candidate` | 从供应商 URL 导入——单条或批量——应用规则，返回预览 |
 | `get_import_preview` | 查看已准备的草稿预览 |
 | `set_product_visibility` | 调整可见性 (backend_only / sell_immediately) |
-| `confirm_push_to_store` | 确认推送到目标店铺 |
+| `confirm_push_to_store` | 推送到店铺——单条、批量或多店铺 |
 | `get_job_status` | 查询推送最终状态 |
+
+### 支持平台
+
+| 类型 | 平台 |
+|------|------|
+| **来源（导入）** | AliExpress（速卖通）、Alibaba、1688 |
+| **目标（推送）** | Shopify、Wix、WooCommerce（通过 DSers） |
 
 ### 快速开始
 
 ```bash
 # 1. 克隆并安装
-git clone <repo-url> && cd dropship-import-mcp
+git clone https://github.com/lofder/dsers-dropship-mcp.git && cd dsers-dropship-mcp
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -170,7 +185,7 @@ dropship-import-mcp/
 |------|------|------|
 | `DSERS_EMAIL` | 是 | DSers 账户邮箱 |
 | `DSERS_PASSWORD` | 是 | DSers 账户密码 |
-| `DSERS_ENV` | 否 | `test` 或 `production`（默认 `test`） |
+| `DSERS_ENV` | 否 | `production`（默认）或 `test` |
 | `IMPORT_PROVIDER_MODULE` | 否 | Provider 模块路径（默认 `dsers_provider.provider`） |
 | `IMPORT_MCP_STATE_DIR` | 否 | 作业状态目录（默认 `.state`） |
 
@@ -186,7 +201,8 @@ dropship-import-mcp/
 | `auto_inventory_update` | bool | 自动同步库存 |
 | `auto_price_update` | bool | 自动同步价格 |
 | `sales_channels` | list | 销售渠道列表 |
-| `store_shipping_profile` | list | 平台 Delivery Profile 绑定（fallback） |
+| `shipping_profile_name` | string | Shopify 运费模板名称——不指定则自动使用默认模板 |
+| `store_shipping_profile` | list | 手动覆盖：原始 delivery profile 绑定（极少需要） |
 
 ### Provider 扩展
 
