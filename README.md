@@ -1,4 +1,4 @@
-# Dropship Import MCP
+# DSers MCP Product
 
 > [English](#english) | [中文](#中文)
 
@@ -41,7 +41,7 @@ An MCP server for dropshipping product import, built on [Model Context Protocol]
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/lofder/dsers-dropship-mcp.git && cd dsers-dropship-mcp
+git clone https://github.com/lofder/dsers-mcp-product.git && cd dsers-mcp-product
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -60,9 +60,9 @@ python server.py
 ### Project Structure
 
 ```
-dropship-import-mcp/
+dsers-mcp-product/
 ├── server.py                 # MCP server entry point
-├── dropship_import_mcp/      # Protocol layer (tools, rules engine, job management)
+├── dsers_mcp_product/      # Protocol layer (tools, rules engine, job management)
 ├── dsers_provider/           # DSers adapter (ImportProvider implementation)
 ├── vendor-dsers/             # DSers API library (auth / product / order / logistics)
 ├── ARCHITECTURE.md           # Technical architecture
@@ -149,7 +149,7 @@ MIT
 
 ```bash
 # 1. 克隆并安装
-git clone https://github.com/lofder/dsers-dropship-mcp.git && cd dsers-dropship-mcp
+git clone https://github.com/lofder/dsers-mcp-product.git && cd dsers-mcp-product
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -168,9 +168,9 @@ python server.py
 ### 项目结构
 
 ```
-dropship-import-mcp/
+dsers-mcp-product/
 ├── server.py                 # MCP 服务入口
-├── dropship_import_mcp/      # 协议层（工具定义、规则引擎、作业管理）
+├── dsers_mcp_product/      # 协议层（工具定义、规则引擎、作业管理）
 ├── dsers_provider/           # DSers 适配层（ImportProvider 实现）
 ├── vendor-dsers/             # DSers API 封装库（认证/商品/订单/物流）
 ├── ARCHITECTURE.md           # 详细技术架构文档

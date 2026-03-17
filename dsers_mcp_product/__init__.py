@@ -1,6 +1,6 @@
 """
-Public Dropship Import MCP Package
-公开的代发货商品导入 MCP 包
+DSers MCP Product Package
+DSers MCP 商品包
 
 This package exposes a provider-neutral, scenario-first product import
 workflow as an MCP server. The protocol layer is fully open-source and

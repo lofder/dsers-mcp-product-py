@@ -33,7 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
-from dropship_import_mcp.provider import ImportProvider
+from dsers_mcp_product.provider import ImportProvider
 
 # ──────────────────────────────────────────────────────────────
 #  Constants / 常量

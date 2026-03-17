@@ -6,9 +6,9 @@ import json
 import os
 from pathlib import Path
 
-from dropship_import_mcp.job_store import FileJobStore
-from dropship_import_mcp.provider import load_provider
-from dropship_import_mcp.service import ImportFlowService
+from dsers_mcp_product.job_store import FileJobStore
+from dsers_mcp_product.provider import load_provider
+from dsers_mcp_product.service import ImportFlowService
 
 
 async def main() -> None:

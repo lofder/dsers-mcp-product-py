@@ -1,4 +1,4 @@
-# User Guide / 使用指南 — Dropship Import MCP
+# User Guide / 使用指南 — DSers MCP Product
 
 > [English](#english) | [中文](#中文)
 
@@ -26,8 +26,8 @@ This guide is for **end users** — how to install, configure, and use this MCP 
 
 ```bash
 # Clone the repository
-git clone https://github.com/lofder/dropship-import-mcp.git
-cd dropship-import-mcp
+git clone https://github.com/lofder/dsers-mcp-product.git
+cd dsers-mcp-product
 
 # Create virtual environment and install dependencies
 python3 -m venv .venv
@@ -87,9 +87,9 @@ In Cursor settings, find MCP configuration (Settings → MCP) and add:
 {
   "mcpServers": {
     "dropship-import": {
-      "command": "/absolute/path/to/dropship-import-mcp/.venv/bin/python",
+      "command": "/absolute/path/to/dsers-mcp-product/.venv/bin/python",
       "args": ["server.py"],
-      "cwd": "/absolute/path/to/dropship-import-mcp"
+      "cwd": "/absolute/path/to/dsers-mcp-product"
     }
   }
 }
@@ -105,9 +105,9 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 {
   "mcpServers": {
     "dropship-import": {
-      "command": "/absolute/path/to/dropship-import-mcp/.venv/bin/python",
+      "command": "/absolute/path/to/dsers-mcp-product/.venv/bin/python",
       "args": ["server.py"],
-      "cwd": "/absolute/path/to/dropship-import-mcp"
+      "cwd": "/absolute/path/to/dsers-mcp-product"
     }
   }
 }
@@ -267,7 +267,7 @@ Currently supported:
 Set the environment variable to switch provider:
 
 ```ini
-IMPORT_PROVIDER_MODULE=dropship_import_mcp.mock_provider
+IMPORT_PROVIDER_MODULE=dsers_mcp_product.mock_provider
 ```
 
 `mock_provider` is a built-in offline simulator for development and demos. You can also implement your own provider (see [ARCHITECTURE.md](ARCHITECTURE.md) Section 5).
@@ -311,8 +311,8 @@ When you encounter issues, check in this order:
 
 ```bash
 # 克隆仓库
-git clone https://github.com/lofder/dropship-import-mcp.git
-cd dropship-import-mcp
+git clone https://github.com/lofder/dsers-mcp-product.git
+cd dsers-mcp-product
 
 # 创建虚拟环境并安装依赖
 python3 -m venv .venv
@@ -372,9 +372,9 @@ python smoke_dsers.py
 {
   "mcpServers": {
     "dropship-import": {
-      "command": "/绝对路径/dropship-import-mcp/.venv/bin/python",
+      "command": "/绝对路径/dsers-mcp-product/.venv/bin/python",
       "args": ["server.py"],
-      "cwd": "/绝对路径/dropship-import-mcp"
+      "cwd": "/绝对路径/dsers-mcp-product"
     }
   }
 }
@@ -390,9 +390,9 @@ python smoke_dsers.py
 {
   "mcpServers": {
     "dropship-import": {
-      "command": "/绝对路径/dropship-import-mcp/.venv/bin/python",
+      "command": "/绝对路径/dsers-mcp-product/.venv/bin/python",
       "args": ["server.py"],
-      "cwd": "/绝对路径/dropship-import-mcp"
+      "cwd": "/绝对路径/dsers-mcp-product"
     }
   }
 }
@@ -552,7 +552,7 @@ DSERS_ENV=production
 设置环境变量切换 Provider：
 
 ```ini
-IMPORT_PROVIDER_MODULE=dropship_import_mcp.mock_provider
+IMPORT_PROVIDER_MODULE=dsers_mcp_product.mock_provider
 ```
 
 `mock_provider` 是内置的离线模拟 Provider，用于开发和演示。你也可以实现自己的 Provider（参见 [ARCHITECTURE.md](ARCHITECTURE.md) 第 5 节）。

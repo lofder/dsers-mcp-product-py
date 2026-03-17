@@ -18,7 +18,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
-from dropship_import_mcp.provider import ImportProvider
+from dsers_mcp_product.provider import ImportProvider
 
 
 # Sample product used by the mock provider for all imports.

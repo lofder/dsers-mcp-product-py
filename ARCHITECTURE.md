@@ -1,4 +1,4 @@
-# Technical Architecture / 技术架构文档 — Dropship Import MCP
+# Technical Architecture / 技术架构文档 — DSers MCP Product
 
 > [English](#english) | [中文](#中文)
 
@@ -10,7 +10,7 @@
 
 ### 1. Overview
 
-**Dropship Import MCP** is an [MCP](https://modelcontextprotocol.io/) server that gives AI Agents a complete **import → edit → push-to-store** workflow for dropshipping products.
+**DSers MCP Product** is an [MCP](https://modelcontextprotocol.io/) server that gives AI Agents a complete **import → edit → push-to-store** workflow for dropshipping products.
 
 Agents call 7 high-level tools to go from a supplier URL to a live store listing, without knowing any platform API details.
 
@@ -19,9 +19,9 @@ Agents call 7 high-level tools to go from a supplier URL to a live store listing
 ### 2. Directory Structure
 
 ```
-dropship-import-mcp/
+dsers-mcp-product/
 ├── server.py                     # MCP server entry (stdio transport)
-├── dropship_import_mcp/          # Core package — protocol layer
+├── dsers_mcp_product/          # Core package — protocol layer
 │   ├── provider.py               # ImportProvider ABC + dynamic loading
 │   ├── mock_provider.py          # Offline mock provider (dev / demo)
 │   ├── service.py                # ImportFlowService — tool orchestration
@@ -63,7 +63,7 @@ dropship-import-mcp/
 └──────────────────┬──────────────────────────┘
                    │ MCP Protocol (stdio)
 ┌──────────────────▼──────────────────────────┐
-│  server.py + dropship_import_mcp/           │
+│  server.py + dsers_mcp_product/           │
 │  ┌────────────────────────────────────────┐ │
 │  │  ImportFlowService (orchestration)     │ │
 │  │  ├─ Rules Engine                       │ │
@@ -90,7 +90,7 @@ dropship-import-mcp/
 
 | Layer | Directory | Responsibility | Replaceable |
 |-------|-----------|----------------|-------------|
-| **Protocol** | `dropship_import_mcp/` | 7 MCP tools, prepare → review → push orchestration | Fixed |
+| **Protocol** | `dsers_mcp_product/` | 7 MCP tools, prepare → review → push orchestration | Fixed |
 | **Adapter** | `dsers_provider/` | Implements `ImportProvider`, translates platform-agnostic requests into platform-specific calls | Swappable |
 | **Platform Lib** | `vendor-dsers/` | Low-level HTTP API wrappers (auth, product, order, logistics) | Replaced with adapter |
 
@@ -212,7 +212,7 @@ During push to Shopify stores, the Delivery Profile is handled automatically:
 #### 8.1 Setup
 
 ```bash
-git clone <repo-url> && cd dropship-import-mcp
+git clone https://github.com/lofder/dsers-mcp-product.git && cd dsers-mcp-product
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -241,7 +241,7 @@ Cursor MCP config:
     "dropship-import": {
       "command": "python",
       "args": ["server.py"],
-      "cwd": "/path/to/dropship-import-mcp"
+      "cwd": "/path/to/dsers-mcp-product"
     }
   }
 }
@@ -281,7 +281,7 @@ Cursor MCP config:
 
 ### 1. 项目定位
 
-**Dropship Import MCP** 是一个基于 [MCP](https://modelcontextprotocol.io/) 的服务器，为 AI Agent 提供**一件代发商品导入 → 编辑 → 推送到店铺**的完整工作流。
+**DSers MCP Product** 是一个基于 [MCP](https://modelcontextprotocol.io/) 的服务器，为 AI Agent 提供**一件代发商品导入 → 编辑 → 推送到店铺**的完整工作流。
 
 Agent 只需调用 7 个高层工具，即可完成从供应商 URL 到店铺上架的全过程，无需了解底层平台 API 细节。
 
@@ -290,9 +290,9 @@ Agent 只需调用 7 个高层工具，即可完成从供应商 URL 到店铺上
 ### 2. 目录结构
 
 ```
-dropship-import-mcp/
+dsers-mcp-product/
 ├── server.py                     # MCP 服务入口 (stdio transport)
-├── dropship_import_mcp/          # 核心包 — 协议层
+├── dsers_mcp_product/          # 核心包 — 协议层
 │   ├── provider.py               # ImportProvider 抽象基类 + 动态加载
 │   ├── mock_provider.py          # 离线 Mock Provider（开发/演示）
 │   ├── service.py                # ImportFlowService — 工具编排层
@@ -334,7 +334,7 @@ dropship-import-mcp/
 └──────────────────┬──────────────────────────┘
                    │ MCP Protocol (stdio)
 ┌──────────────────▼──────────────────────────┐
-│  server.py + dropship_import_mcp/           │
+│  server.py + dsers_mcp_product/           │
 │  ┌────────────────────────────────────────┐ │
 │  │  ImportFlowService (协议编排层)          │ │
 │  │  ├─ Rules Engine    规则校验/应用       │ │
@@ -361,7 +361,7 @@ dropship-import-mcp/
 
 | 层级 | 目录 | 职责 | 可替换性 |
 |------|------|------|----------|
-| **协议层** | `dropship_import_mcp/` | 定义 7 个 MCP 工具，编排 prepare → review → push 流程 | 固定 |
+| **协议层** | `dsers_mcp_product/` | 定义 7 个 MCP 工具，编排 prepare → review → push 流程 | 固定 |
 | **适配层** | `dsers_provider/` | 实现 `ImportProvider` 接口，转换平台无关请求为平台特定调用 | 可替换为其他平台 |
 | **平台库** | `vendor-dsers/` | 封装底层 HTTP API（认证、商品、订单、物流） | 随适配层一同替换 |
 
@@ -483,7 +483,7 @@ DSersClient.__init__() → 尝试从 session_file 恢复
 #### 8.1 环境搭建
 
 ```bash
-git clone <repo-url> && cd dropship-import-mcp
+git clone https://github.com/lofder/dsers-mcp-product.git && cd dsers-mcp-product
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
@@ -512,7 +512,7 @@ python server.py
     "dropship-import": {
       "command": "python",
       "args": ["server.py"],
-      "cwd": "/path/to/dropship-import-mcp"
+      "cwd": "/path/to/dsers-mcp-product"
     }
   }
 }

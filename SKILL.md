@@ -1,4 +1,4 @@
-# Dropship Import MCP — Skill Guide / 技能指南
+# DSers MCP Product — Skill Guide / 技能指南
 
 > [English](#english) | [中文](#中文)
 

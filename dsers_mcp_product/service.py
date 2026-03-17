@@ -22,11 +22,11 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from dropship_import_mcp.job_store import FileJobStore
-from dropship_import_mcp.provider import ImportProvider
-from dropship_import_mcp.push_options import normalize_push_options
-from dropship_import_mcp.resolver import resolve_source_url
-from dropship_import_mcp.rules import apply_rules, normalize_rules
+from dsers_mcp_product.job_store import FileJobStore
+from dsers_mcp_product.provider import ImportProvider
+from dsers_mcp_product.push_options import normalize_push_options
+from dsers_mcp_product.resolver import resolve_source_url
+from dsers_mcp_product.rules import apply_rules, normalize_rules
 
 
 class ImportFlowService:

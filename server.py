@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Dropship Import MCP Server — Entry point for the product import workflow.
-代发货导入 MCP 服务器 —— 商品导入工作流的入口点
+DSers MCP Product Server — Entry point for the product import workflow.
+DSers MCP 商品服务器 —— 商品导入工作流的入口点
 
 Registers seven MCP tools covering single, batch, and multi-store workflows:
   1. get_rule_capabilities    — discover provider features
@@ -34,9 +34,9 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from dropship_import_mcp.job_store import FileJobStore
-from dropship_import_mcp.provider import load_provider
-from dropship_import_mcp.service import ImportFlowService
+from dsers_mcp_product.job_store import FileJobStore
+from dsers_mcp_product.provider import load_provider
+from dsers_mcp_product.service import ImportFlowService
 
 load_dotenv()
 
@@ -49,7 +49,7 @@ STATE_DIR = Path(os.getenv("IMPORT_MCP_STATE_DIR", Path(__file__).resolve().pare
 PROVIDER = load_provider()
 SERVICE = ImportFlowService(PROVIDER, FileJobStore(STATE_DIR))
 
-app = Server("public-dropship-import-mcp")
+app = Server("dsers-mcp-product")
 
 
 def _reply_json(data: Any) -> list[TextContent]:

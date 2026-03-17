@@ -6,13 +6,13 @@ import json
 import os
 from pathlib import Path
 
-from dropship_import_mcp.job_store import FileJobStore
-from dropship_import_mcp.provider import load_provider
-from dropship_import_mcp.service import ImportFlowService
+from dsers_mcp_product.job_store import FileJobStore
+from dsers_mcp_product.provider import load_provider
+from dsers_mcp_product.service import ImportFlowService
 
 
 async def main() -> None:
-    os.environ.setdefault("IMPORT_PROVIDER_MODULE", "dropship_import_mcp.mock_provider")
+    os.environ.setdefault("IMPORT_PROVIDER_MODULE", "dsers_mcp_product.mock_provider")
     os.environ.setdefault("IMPORT_MCP_STATE_DIR", str(Path(__file__).resolve().parent / ".state-smoke"))
 
     service = ImportFlowService(load_provider(), FileJobStore(Path(os.environ["IMPORT_MCP_STATE_DIR"])))
