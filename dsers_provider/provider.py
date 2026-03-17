@@ -129,11 +129,16 @@ class PrivateDsersProvider(ImportProvider):
     async def get_rule_capabilities(self, target_store: Optional[str] = None) -> Dict[str, Any]:
         """
         Query linked stores and declare which rules, push options, and
-        visibility modes this adapter supports.
+        visibility modes this adapter supports.  For Shopify stores, also
+        fetches available delivery profiles so the caller can display them
+        and optionally let the user choose one by name.
 
         查询已关联店铺，声明此适配器支持的规则、推送选项和可见性模式。
+        对于 Shopify 店铺，还会获取可用的 Delivery Profile 列表，
+        供调用方展示给用户选择。
         """
         stores = await self._list_stores()
+        stores = await self._enrich_shopify_profiles(stores)
         visibility_modes = ["backend_only", "sell_immediately"]
 
         notes = [
@@ -183,10 +188,16 @@ class PrivateDsersProvider(ImportProvider):
                     "auto_price_update",
                     "sales_channels",
                     "store_shipping_profile",
+                    "shipping_profile_name",
                 ],
                 "image_strategy_modes": ["selected_only", "all_available"],
                 "pricing_rule_behavior_modes": ["keep_manual", "apply_store_pricing_rule"],
                 "sales_channels": DEFAULT_PUSH_CHANNELS,
+                "shipping_profile_name_hint": (
+                    "For Shopify stores, specify a delivery profile name "
+                    "(e.g. 'DSers Shipping Profile') to override the default. "
+                    "If omitted, the profile marked as default (isChecked) is used automatically."
+                ),
             },
             "notes": notes,
         }
@@ -582,9 +593,8 @@ class PrivateDsersProvider(ImportProvider):
         Shopify rejects the push with 'shipping profile not found'.
 
         Fallback chain:
-          1. dsers_get_store_shipping_profile dedicated API
-          2. dsers_push_before_check pre-push validation response
-          3. push_options.store_shipping_profile manual override
+          1. Shopify-specific delivery profile API (isChecked=true profile)
+          2. push_options.store_shipping_profile manual override
 
         Non-Shopify platforms (Wix, WooCommerce, etc.) do not require this
         field and will skip the profile lookup entirely.
@@ -593,9 +603,8 @@ class PrivateDsersProvider(ImportProvider):
         Shopify 会以 'shipping profile not found' 拒绝推送。
 
         回退链：
-          1. dsers_get_store_shipping_profile 专用 API
-          2. dsers_push_before_check 推送前校验响应
-          3. push_options.store_shipping_profile 手动覆盖
+          1. Shopify 专用 delivery profile API（取 isChecked=true 的 profile）
+          2. push_options.store_shipping_profile 手动覆盖
 
         非 Shopify 平台（Wix、WooCommerce 等）不需要此字段，会完全跳过查询。
         """
@@ -614,38 +623,39 @@ class PrivateDsersProvider(ImportProvider):
         store_id = self._coerce_numeric_id(store_ref)
         profile_items: Optional[List[Dict[str, Any]]] = None
 
-        # Source 1: dedicated shipping profile API.
+        desired_name = (push_options.get("shipping_profile_name") or "").strip()
+
+        # Source 1: Shopify-specific delivery profile API.
+        # GET /dsers-product-bff/import-list/shopify/shipping-profile/get
+        # If shipping_profile_name is given, match by name; otherwise pick isChecked=true.
         try:
-            payload = await self._call(
-                self._product_handler,
-                "dsers_get_store_shipping_profile",
-                {"storeId": str(store_id)},
-            )
-            data = payload.get("data")
-            if isinstance(data, list) and data:
-                profile_items = data
+            profiles_by_store = await self._fetch_shopify_profiles()
+            target_key = str(store_id)
+            raw_profiles = profiles_by_store.get(target_key, [])
+
+            if desired_name:
+                for profile in raw_profiles:
+                    if (profile.get("name") or "").strip().lower() == desired_name.lower():
+                        profile_items = self._extract_profile_gids(profile, target_key)
+                        if profile_items:
+                            warnings.append(f"Matched shipping profile by name: '{desired_name}'.")
+                        break
+                if not profile_items:
+                    available = [p.get("name", "") for p in raw_profiles]
+                    warnings.append(
+                        f"shipping_profile_name '{desired_name}' not found. "
+                        f"Available profiles: {available}. Falling back to default."
+                    )
+
+            if not profile_items:
+                for profile in raw_profiles:
+                    if profile.get("isChecked"):
+                        profile_items = self._extract_profile_gids(profile, target_key)
+                        break
         except Exception:
-            warnings.append("Could not query store shipping profile from the provider API.")
+            warnings.append("Could not query Shopify delivery profiles.")
 
-        # Source 2: push-before/check response.
-        if not profile_items and import_item_id:
-            try:
-                import_list_id = self._coerce_numeric_id(import_item_id)
-                check_payload = await self._call(
-                    self._product_handler,
-                    "dsers_push_before_check",
-                    {"importListIds": [import_list_id], "storeIds": [store_id]},
-                )
-                check_profiles = self._find_first_value_by_keys(
-                    check_payload, ["storeShippingProfile"],
-                )
-                if isinstance(check_profiles, list) and check_profiles:
-                    profile_items = check_profiles
-                    warnings.append("Obtained storeShippingProfile from push-before/check response.")
-            except Exception:
-                warnings.append("push-before/check fallback for shipping profile also failed.")
-
-        # Source 3: manual override from push_options.
+        # Source 2: manual override from push_options.
         if not profile_items:
             fallback = push_options.get("store_shipping_profile")
             if isinstance(fallback, list) and fallback:
@@ -654,17 +664,29 @@ class PrivateDsersProvider(ImportProvider):
 
         if profile_items:
             push_args["storeShippingProfile"] = profile_items
-            warnings.append("Attached store shipping profile to the push request.")
+            warnings.append("Attached Shopify delivery profile to the push request.")
         else:
             warnings.append(
                 f"Shopify store '{store_name}' ({store_domain}) has no Delivery Profile "
                 f"configured in DSers. The push will likely fail with 'shipping profile "
-                f"not found'. To fix: open DSers web UI → Settings → Shipping → configure "
+                f"not found'. To fix: open DSers web UI -> Settings -> Shipping -> configure "
                 f"a Delivery Profile for this store, or provide store_shipping_profile "
                 f"in push_options."
             )
 
         return warnings
+
+    @staticmethod
+    def _extract_profile_gids(
+        profile: Dict[str, Any], store_id: str,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Build the storeShippingProfile payload item from a raw profile dict."""
+        profile_id = profile.get("id", "")
+        groups = profile.get("profileGroups") or []
+        location_id = groups[0].get("id", "") if groups else ""
+        if profile_id and location_id:
+            return [{"storeId": store_id, "locationId": location_id, "profileId": profile_id}]
+        return None
 
     async def _get_template_service_ids(
         self,
@@ -853,6 +875,70 @@ class PrivateDsersProvider(ImportProvider):
                 }
             )
         return stores
+
+    async def _fetch_shopify_profiles(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Call the Shopify-specific delivery profile API and return a dict
+        keyed by storeId, each value being the raw profiles list.
+
+        调用 Shopify 专用 delivery profile API，返回按 storeId 分组的原始 profiles。
+        """
+        try:
+            payload = await self._call(
+                self._product_handler,
+                "dsers_get_shopify_shipping_profiles",
+                {},
+            )
+            data = payload.get("data")
+            if not isinstance(data, list):
+                return {}
+            return {
+                str(entry.get("storeId") or ""): entry.get("profiles") or []
+                for entry in data
+                if entry.get("storeId")
+            }
+        except Exception:
+            return {}
+
+    async def _enrich_shopify_profiles(self, stores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        For each Shopify store, attach a human-readable ``shipping_profiles``
+        list so the caller can present available profiles to the user.
+
+        为每个 Shopify 店铺附加人类可读的 shipping_profiles 列表，
+        供调用方展示给用户选择。
+        """
+        has_shopify = any(
+            ".myshopify.com" in (s.get("domain") or "") or str(s.get("platform") or "").lower() == "shopify"
+            for s in stores
+        )
+        if not has_shopify:
+            return stores
+
+        profiles_by_store = await self._fetch_shopify_profiles()
+        if not profiles_by_store:
+            return stores
+
+        enriched = []
+        for s in stores:
+            is_shopify = ".myshopify.com" in (s.get("domain") or "") or str(s.get("platform") or "").lower() == "shopify"
+            if not is_shopify:
+                enriched.append(s)
+                continue
+            raw_profiles = profiles_by_store.get(s["store_ref"], [])
+            readable: List[Dict[str, Any]] = []
+            for p in raw_profiles:
+                groups = p.get("profileGroups") or []
+                first_group = groups[0] if groups else {}
+                readable.append({
+                    "name": p.get("name", ""),
+                    "is_default": bool(p.get("isChecked")),
+                    "countries": int(first_group.get("countryCount") or 0),
+                    "rate": first_group.get("rate", ""),
+                    "currency": first_group.get("currency", ""),
+                })
+            enriched.append({**s, "shipping_profiles": readable})
+        return enriched
 
     async def _resolve_store(self, target_store: Optional[str]) -> Dict[str, Any]:
         stores = await self._list_stores()

@@ -172,7 +172,11 @@ TOOLS = [
                 "visibility_mode": {"type": "string", "description": "backend_only or sell_immediately"},
                 "push_options": {
                     "type": "object",
-                    "description": "Provider-neutral publish settings (shared, can be overridden per-item).",
+                    "description": (
+                        "Provider-neutral publish settings (shared, can be overridden per-item). "
+                        "For Shopify stores, use 'shipping_profile_name' to select a specific delivery profile "
+                        "(e.g. 'DSers Shipping Profile'). If omitted, the default profile is used automatically."
+                    ),
                 },
             },
             "required": [],

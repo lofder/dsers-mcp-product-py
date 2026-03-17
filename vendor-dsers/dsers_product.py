@@ -202,6 +202,15 @@ def register(app: Any, client: "DSersClient") -> tuple[list[Tool], Any]:
             },
         ),
         Tool(
+            name="dsers_get_shopify_shipping_profiles",
+            description="Get Shopify delivery profiles for all linked Shopify stores. Returns profile GIDs and location group GIDs needed for the storeShippingProfile push field. The profile with isChecked=true is the active one.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+        Tool(
             name="dsers_list_import_tags",
             description="List all import list tags.",
             inputSchema={"type": "object", "properties": {}, "required": []},
@@ -775,6 +784,10 @@ def register(app: Any, client: "DSersClient") -> tuple[list[Tool], Any]:
             if name == "dsers_get_store_shipping_profile":
                 params = _params(arguments, "storeId")
                 data = await client.get("/dsers-product-bff/import-list/push/store-shipping-profile", **params)
+                return reply(data)
+
+            if name == "dsers_get_shopify_shipping_profiles":
+                data = await client.get("/dsers-product-bff/import-list/shopify/shipping-profile/get")
                 return reply(data)
 
             if name == "dsers_list_import_tags":
