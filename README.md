@@ -1,4 +1,8 @@
-# DSers MCP Product — Automate AliExpress to Shopify Import
+# DSers MCP Product (Python) — Automate AliExpress to Shopify Import
+
+> **Note:** The TypeScript version is now the primary maintained version. See [dsers-mcp-product](https://github.com/lofder/dsers-mcp-product) for the latest features, documentation, and Smithery integration. This Python version remains functional and will receive critical fixes.
+>
+> **注意：** TypeScript 版本现在是主要维护版本。最新功能、文档和 Smithery 集成请参见 [dsers-mcp-product](https://github.com/lofder/dsers-mcp-product)。此 Python 版本仍可正常使用，将继续接收关键修复。
 
 > An open-source MCP server to automate DSers product import, bulk edit variants, and push to Shopify using AI.
 

@@ -1,4 +1,6 @@
-# Technical Architecture / 技术架构文档 — DSers MCP Product
+# Technical Architecture / 技术架构文档 — DSers MCP Product (Python)
+
+> **Note:** The TypeScript version is now the primary maintained version. See [dsers-mcp-product](https://github.com/lofder/dsers-mcp-product).
 
 > [English](#english) | [中文](#中文)
 

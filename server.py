@@ -65,11 +65,23 @@ TOOLS = [
     Tool(
         name="get_rule_capabilities",
         title="Store & Rule Discovery",
-        description="Show supported rule families, stores, visibility modes, and push options for the currently loaded provider.",
+        description=(
+            "Retrieve available stores, supported rule families (pricing, content, images), push options, and visibility modes "
+            "for the connected DSers account. Call this first before any other tool — the response contains store IDs, "
+            "shipping profiles, and configuration constraints needed by all subsequent operations. "
+            "Returns: provider_label, source_support (aliexpress/alibaba/1688), stores (each with store_ref, display_name, "
+            "platform, shipping_profiles), rule_families, push_options, notes."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "target_store": {"type": "string", "description": "Optional store ref or display name to inspect"},
+                "target_store": {
+                    "type": "string",
+                    "description": (
+                        "Store ID or display name to filter capabilities for a specific store. "
+                        "Omit to see all linked stores. Use the store_ref or display_name from this response in later calls."
+                    ),
+                },
             },
             "required": [],
         },
@@ -77,14 +89,60 @@ TOOLS = [
     Tool(
         name="validate_rules",
         title="Rule Validation",
-        description="Validate and normalize a structured rule object against the currently loaded provider before preparing an import candidate.",
+        description=(
+            "Check and normalize a rules object against the provider's capabilities before importing. "
+            "Use this to verify pricing, content, and image rules are valid and see exactly which ones will be applied. "
+            "Returns: effective_rules_snapshot (what will actually be applied), warnings (adjustments made), "
+            "errors (blocking issues that must be fixed before calling prepare_import_candidate)."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "target_store": {"type": "string", "description": "Optional store ref or display name to validate against"},
+                "target_store": {
+                    "type": "string",
+                    "description": "Store ID or display name from get_rule_capabilities. Some rule capabilities vary by store.",
+                },
                 "rules": {
                     "type": "object",
-                    "description": "Structured rule object with pricing, content, images, and optional instruction_text.",
+                    "description": (
+                        "Structured rule object. Top-level keys: pricing, content, images."
+                    ),
+                    "properties": {
+                        "pricing": {
+                            "type": "object",
+                            "description": "Pricing rules to apply to variants.",
+                            "properties": {
+                                "mode": {
+                                    "type": "string",
+                                    "enum": ["provider_default", "multiplier", "fixed_markup"],
+                                    "description": "Pricing mode. provider_default: keep original prices. multiplier: multiply supplier price. fixed_markup: add fixed amount.",
+                                },
+                                "multiplier": {"type": "number", "description": "Price multiplier (required when mode=multiplier). Example: 2.5"},
+                                "fixed_markup": {"type": "number", "description": "Fixed amount to add (required when mode=fixed_markup). Example: 5.00"},
+                                "round_digits": {"type": "integer", "description": "Decimal places to round to. Default: 2"},
+                            },
+                        },
+                        "content": {
+                            "type": "object",
+                            "description": "Product content modifications.",
+                            "properties": {
+                                "title_override": {"type": "string", "description": "Replace the entire product title."},
+                                "title_prefix": {"type": "string", "description": "Prepend to the product title. Example: '[US] '"},
+                                "title_suffix": {"type": "string", "description": "Append to the product title."},
+                                "description_override_html": {"type": "string", "description": "Replace the entire product description (HTML)."},
+                                "description_append_html": {"type": "string", "description": "Append HTML to the existing description."},
+                                "tags_add": {"type": "array", "items": {"type": "string"}, "description": "Tags to add to the product."},
+                            },
+                        },
+                        "images": {
+                            "type": "object",
+                            "description": "Image selection rules.",
+                            "properties": {
+                                "keep_first_n": {"type": "integer", "description": "Keep only the first N images. Example: 5"},
+                                "drop_indexes": {"type": "array", "items": {"type": "integer"}, "description": "0-based image indexes to remove. Applied before keep_first_n."},
+                            },
+                        },
+                    },
                 },
             },
             "required": ["rules"],
@@ -94,20 +152,27 @@ TOOLS = [
         name="prepare_import_candidate",
         title="Import Products",
         description=(
-            "Import products from supplier URLs and return preview bundles. "
-            "Supports single mode (source_url) and batch mode (source_urls). "
-            "In batch mode, each URL is processed independently — failures do not block other items."
+            "Import product(s) from supplier URL(s) into the DSers import list and return a preview bundle with title, "
+            "prices, images, and variants. Single mode: provide source_url. Batch mode: provide source_urls with an array. "
+            "Each successful import returns a job_id needed for get_import_preview, set_product_visibility, and confirm_push_to_store. "
+            "Returns: job_id, status, title_before/after, price_range_before/after, images_before/after, variant_count, "
+            "variant_preview (first 5), warnings."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "source_url": {"type": "string", "description": "Single source product URL (single mode)"},
+                "source_url": {
+                    "type": "string",
+                    "description": (
+                        "Single supplier product URL. Supports AliExpress (aliexpress.com/item/xxx.html), "
+                        "Alibaba (alibaba.com/product-detail/xxx.html), and 1688 (1688.com/offer/xxx.html)."
+                    ),
+                },
                 "source_urls": {
                     "type": "array",
                     "description": (
-                        "Batch mode: list of URLs to import. Each item can be a plain URL string "
-                        "or an object {url, source_hint?, country?, target_store?, rules?} for per-item overrides. "
-                        "When present, source_url is ignored."
+                        "Batch import: list of URL strings or objects with {url, source_hint?, country?, target_store?, "
+                        "visibility_mode?, rules?} for per-item overrides. When present, source_url is ignored."
                     ),
                     "items": {
                         "oneOf": [
@@ -122,13 +187,33 @@ TOOLS = [
                         ],
                     },
                 },
-                "source_hint": {"type": "string", "description": "Optional source hint: auto, aliexpress, accio"},
-                "country": {"type": "string", "description": "Target country code such as US"},
-                "target_store": {"type": "string", "description": "Optional store ref or display name"},
-                "visibility_mode": {"type": "string", "description": "backend_only or sell_immediately"},
+                "source_hint": {
+                    "type": "string",
+                    "enum": ["auto", "aliexpress", "alibaba", "1688", "accio"],
+                    "description": "Supplier platform hint. Default: auto (detected from URL).",
+                },
+                "country": {"type": "string", "description": "Target country code for shipping and pricing lookup. Examples: US, GB, DE, FR, AU."},
+                "target_store": {
+                    "type": "string",
+                    "description": "Store ID or display name from get_rule_capabilities. Required when the account has multiple stores.",
+                },
+                "visibility_mode": {
+                    "type": "string",
+                    "enum": ["backend_only", "sell_immediately"],
+                    "description": (
+                        "Product visibility after push. "
+                        "backend_only: saved as draft, not visible to shoppers. "
+                        "sell_immediately: published and visible on the storefront."
+                    ),
+                },
                 "rules": {
                     "type": "object",
-                    "description": "Shared rules applied to all items (can be overridden per-item in batch mode).",
+                    "description": (
+                        "Shared rules applied to all items (can be overridden per-item in batch mode). "
+                        "Keys: pricing ({mode, multiplier, fixed_markup, round_digits}), "
+                        "content ({title_override, title_prefix, title_suffix, description_override_html, description_append_html, tags_add}), "
+                        "images ({keep_first_n, drop_indexes})."
+                    ),
                 },
             },
             "required": [],
@@ -137,22 +222,40 @@ TOOLS = [
     Tool(
         name="get_import_preview",
         title="View Import Preview",
-        description="Load a previously prepared preview bundle by job_id.",
+        description=(
+            "Reload the preview for a previously prepared import job without re-importing. "
+            "Use this to re-examine title, prices, images, variants, and applied rules for a job created by prepare_import_candidate. "
+            "Returns the same structure as prepare_import_candidate: job_id, status, title, price ranges, images, variants, rules, warnings."
+        ),
         inputSchema={
             "type": "object",
-            "properties": {"job_id": {"type": "string", "description": "Prepared job id"}},
+            "properties": {
+                "job_id": {"type": "string", "description": "Job ID returned by prepare_import_candidate."},
+            },
             "required": ["job_id"],
         },
     ),
     Tool(
         name="set_product_visibility",
         title="Set Visibility",
-        description="Update the requested visibility mode for a prepared job before confirmation.",
+        description=(
+            "Change the visibility mode of a prepared job before pushing it to the store. "
+            "Call this between prepare_import_candidate and confirm_push_to_store to switch between draft and published. "
+            "Returns: job_id, status, visibility_mode."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
-                "job_id": {"type": "string", "description": "Prepared job id"},
-                "visibility_mode": {"type": "string", "description": "backend_only or sell_immediately"},
+                "job_id": {"type": "string", "description": "Job ID returned by prepare_import_candidate."},
+                "visibility_mode": {
+                    "type": "string",
+                    "enum": ["backend_only", "sell_immediately"],
+                    "description": (
+                        "New visibility mode. "
+                        "backend_only: save as draft, not visible to shoppers. "
+                        "sell_immediately: publish to storefront."
+                    ),
+                },
             },
             "required": ["job_id", "visibility_mode"],
         },
@@ -161,22 +264,25 @@ TOOLS = [
         name="confirm_push_to_store",
         title="Push to Store",
         description=(
-            "Push prepared drafts to store(s). Supports three modes: "
-            "(1) Single: job_id + target_store; "
-            "(2) Batch: job_ids list, each processed independently; "
-            "(3) Multi-store: target_stores list, one job pushed to N stores. "
-            "Batch + multi-store combines as N jobs x M stores."
+            "Push one or more prepared import drafts to the connected Shopify store(s). "
+            "Three modes: (1) Single push — provide job_id + target_store. "
+            "(2) Batch push — provide job_ids with an array of job IDs or objects; takes priority over job_id. "
+            "(3) Multi-store push — provide job_id + target_stores to push one product to multiple stores. "
+            "Returns per-job results: job_id, status, target_store, visibility_applied, push_options_applied, job_summary, warnings."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "job_id": {"type": "string", "description": "Single job id (single mode)"},
+                "job_id": {
+                    "type": "string",
+                    "description": "Single job ID from prepare_import_candidate. Used for single-push or multi-store mode.",
+                },
                 "job_ids": {
                     "type": "array",
                     "description": (
-                        "Batch mode: list of job IDs. Each item can be a plain string "
-                        "or an object {job_id, target_store?, target_stores?, push_options?, visibility_mode?} "
-                        "for per-item overrides. When present, job_id is ignored."
+                        "Batch push: list of job ID strings or objects "
+                        "{job_id, target_store?, target_stores?, push_options?, visibility_mode?}. "
+                        "When provided, this takes priority over job_id."
                     ),
                     "items": {
                         "oneOf": [
@@ -191,20 +297,48 @@ TOOLS = [
                         ],
                     },
                 },
-                "target_store": {"type": "string", "description": "Target store (shared across all items)"},
+                "target_store": {
+                    "type": "string",
+                    "description": "Target store ID or display name from get_rule_capabilities. Required when the account has multiple stores.",
+                },
                 "target_stores": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Push to multiple stores. Each job is pushed to every store in this list.",
+                    "description": "Multi-store: list of store IDs or display names. Pushes the same job_id to each listed store.",
                 },
-                "visibility_mode": {"type": "string", "description": "backend_only or sell_immediately"},
+                "visibility_mode": {
+                    "type": "string",
+                    "enum": ["backend_only", "sell_immediately"],
+                    "description": "Override the visibility mode set during prepare. backend_only: draft. sell_immediately: published.",
+                },
                 "push_options": {
                     "type": "object",
-                    "description": (
-                        "Provider-neutral publish settings (shared, can be overridden per-item). "
-                        "For Shopify stores, use 'shipping_profile_name' to select a specific delivery profile "
-                        "(e.g. 'DSers Shipping Profile'). If omitted, the default profile is used automatically."
-                    ),
+                    "description": "Push configuration (shared, can be overridden per-item in batch mode).",
+                    "properties": {
+                        "publish_to_online_store": {"type": "boolean", "description": "Auto-derived from visibility_mode. Override only if needed."},
+                        "image_strategy": {
+                            "type": "string",
+                            "enum": ["selected_only", "all_available"],
+                            "description": "Which images to push. selected_only: only import-list images. all_available: all supplier images.",
+                        },
+                        "pricing_rule_behavior": {
+                            "type": "string",
+                            "enum": ["keep_manual", "apply_store_pricing_rule"],
+                            "description": "keep_manual: use prices from the draft. apply_store_pricing_rule: apply the store's DSers pricing rule.",
+                        },
+                        "shipping_profile_name": {
+                            "type": "string",
+                            "description": "Shopify delivery profile name (e.g. 'DSers Shipping Profile'). If omitted, the default profile is used.",
+                        },
+                        "auto_inventory_update": {"type": "boolean", "description": "Enable automatic inventory sync after push. Default: false."},
+                        "auto_price_update": {"type": "boolean", "description": "Enable automatic price sync after push. Default: false."},
+                        "sales_channels": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Shopify sales channels to publish to. Examples: online_store, shop_app, google_youtube, tiktok.",
+                        },
+                        "only_push_specifications": {"type": "boolean", "description": "Push only variant specs without images/descriptions. Default: false."},
+                    },
                 },
             },
             "required": [],
@@ -213,10 +347,17 @@ TOOLS = [
     Tool(
         name="get_job_status",
         title="Check Job Status",
-        description="Get the current status for a prepared or pushed job.",
+        description=(
+            "Check the current status of an import or push job. "
+            "Status lifecycle: preview_ready (after prepare) -> push_requested (after confirm) -> completed or failed. "
+            "Call this to monitor push progress or verify a job's state before further action. "
+            "Returns: job_id, status, created_at, updated_at, target_store, visibility_mode, warnings, has_push_result."
+        ),
         inputSchema={
             "type": "object",
-            "properties": {"job_id": {"type": "string", "description": "Prepared job id"}},
+            "properties": {
+                "job_id": {"type": "string", "description": "Job ID from prepare_import_candidate or confirm_push_to_store."},
+            },
             "required": ["job_id"],
         },
     ),

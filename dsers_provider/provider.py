@@ -222,10 +222,10 @@ class PrivateDsersProvider(ImportProvider):
                 "dsers_parse_product_url",
                 {"url": source_url, "appId": app_id},
             )
-            self._raise_if_error(parse_payload, "The private provider could not resolve the source URL in the current test environment.")
+            self._raise_if_error(parse_payload, "Could not resolve the supplier product URL. Verify the URL is a valid AliExpress, Alibaba, or 1688 product link.")
             supply_product_id = self._extract_supply_product_id(parse_payload)
         if not supply_product_id:
-            raise RuntimeError("The private provider could not extract a supplier product id from the source URL.")
+            raise RuntimeError(f"Could not extract a supplier product ID from the URL: {source_url}. Ensure it contains a numeric product ID.")
 
         import_payload = await self._call(
             self._product_handler,
@@ -248,17 +248,17 @@ class PrivateDsersProvider(ImportProvider):
         if not already_exists:
             self._raise_if_error(
                 import_payload,
-                f"The current test provider account is not authorized to import this {source_kind} source yet. Enable the source app in the test account first.",
+                f"Could not import this {source_kind} product. The DSers account may not have the required source app enabled, or the product is unavailable.",
             )
 
         import_item_id = self._extract_import_item_id(import_payload)
         if not import_item_id:
             import_item_id = await self._recover_import_item_id(supply_product_id)
         if not import_item_id:
-            raise RuntimeError("The private provider could not recover the imported draft id.")
+            raise RuntimeError("Could not locate the imported product draft in the import list. The import may have failed silently.")
 
         item_payload = await self._call(self._product_handler, "dsers_get_import_list_item", {"id": import_item_id})
-        self._raise_if_error(item_payload, "The private provider could not fetch the imported draft item.")
+        self._raise_if_error(item_payload, "Could not fetch the imported product draft. The item may have been deleted from the import list.")
         draft, field_map, warnings = self._normalize_import_item(item_payload)
 
         provider_state = {
@@ -308,7 +308,7 @@ class PrivateDsersProvider(ImportProvider):
         if tags_key:
             update_args[tags_key] = draft.get("tags") or []
         elif draft.get("tags"):
-            warnings.append("Tag edits were skipped because the current test backend rejects raw tag writes for import-list items.")
+            warnings.append("Tag edits were skipped because the DSers import list API does not support direct tag writes for this item type.")
 
         variants_key = field_map.get("variants_key")
         if variants_key and field_map.get("raw_variants"):
@@ -334,10 +334,10 @@ class PrivateDsersProvider(ImportProvider):
             if main_image_key:
                 update_args[main_image_key] = (draft.get("images") or [None])[0]
         elif images_key and draft.get("images") is not None:
-            warnings.append("Image edits were skipped because the private provider could not safely write the detected image structure.")
+            warnings.append("Image edits were skipped because the detected image structure could not be safely written back.")
 
         update_payload = await self._call(self._product_handler, "dsers_update_import_list_item", update_args)
-        self._raise_if_error(update_payload, "The private provider could not persist the prepared draft changes.")
+        self._raise_if_error(update_payload, "Could not save the updated product draft. The import list item may have been modified or deleted.")
 
         store = await self._resolve_store(target_store)
         push_args = self._build_push_arguments(
@@ -358,7 +358,7 @@ class PrivateDsersProvider(ImportProvider):
         )
         self._raise_if_error(
             push_payload,
-            "The private provider could not push the prepared draft to the selected store in the current test environment.",
+            "Could not push the product to the store. Check that the store is connected and the product draft is valid.",
         )
         event_id = self._find_first_value_by_keys(push_payload, ["event_id", "eventId", "id"])
         push_state = "requested"
@@ -373,7 +373,7 @@ class PrivateDsersProvider(ImportProvider):
                     if attempt < 3:
                         await asyncio.sleep(10)
             except Exception:
-                warnings.append("Push status polling was skipped because the provider did not return a stable status payload.")
+                warnings.append("Push status polling could not complete. The push may still be processing — call get_job_status later to check.")
         if push_state == "failed":
             push_error = self._extract_push_error(status_payload or {})
             if push_error:
@@ -943,11 +943,15 @@ class PrivateDsersProvider(ImportProvider):
     async def _resolve_store(self, target_store: Optional[str]) -> Dict[str, Any]:
         stores = await self._list_stores()
         if not stores:
-            raise RuntimeError("The private provider could not find any linked stores.")
+            raise RuntimeError("No linked stores found. Connect a Shopify store in DSers before pushing products.")
+        store_names = ", ".join(f"{s.get('display_name', '')} ({s.get('store_ref', '')})" for s in stores)
         if not target_store:
             if len(stores) == 1:
                 return stores[0]
-            raise RuntimeError("Multiple stores are available. Please provide target_store.")
+            raise RuntimeError(
+                f"Multiple stores are available: {store_names}. "
+                "Provide target_store with the store_ref or display_name from get_rule_capabilities."
+            )
 
         target = str(target_store).strip().lower()
         for store in stores:
@@ -955,7 +959,10 @@ class PrivateDsersProvider(ImportProvider):
                 return store
             if str(store.get("display_name") or "").strip().lower() == target:
                 return store
-        raise RuntimeError(f"Unknown target_store: {target_store}")
+        raise RuntimeError(
+            f"Unknown target_store '{target_store}'. Available stores: {store_names}. "
+            "Use the store_ref or display_name from get_rule_capabilities."
+        )
 
     def _extract_supply_product_id(self, payload: Dict[str, Any]) -> str:
         return str(
@@ -1033,13 +1040,13 @@ class PrivateDsersProvider(ImportProvider):
         supply_key = self._first_matching_key(item, ["supply"])
 
         if not title_key:
-            warnings.append("The private provider could not detect a stable title field; using an empty title fallback.")
+            warnings.append("Could not detect a title field in the imported product. Using an empty title fallback.")
         if not images_key:
-            warnings.append("The private provider could not detect a top-level images field; image edits may be limited.")
+            warnings.append("Could not detect a top-level images field. Image edits may be limited.")
         if not variants_key:
-            warnings.append("The private provider could not detect a variants field; pricing edits may be limited.")
+            warnings.append("Could not detect a variants field. Pricing rule edits may be limited.")
         if raw_tags_key:
-            warnings.append("Import-list tag edits are preview-only in the current test backend because raw tag writes are rejected.")
+            warnings.append("Tag edits are preview-only because the DSers import list API does not support direct tag writes for this item type.")
 
         draft = {
             "title": str(item.get(title_key) or ""),
@@ -1227,7 +1234,7 @@ class PrivateDsersProvider(ImportProvider):
             return data[0]
         if isinstance(payload, dict):
             return payload
-        raise RuntimeError("The private provider could not normalize the imported draft payload.")
+        raise RuntimeError("Could not parse the imported product data. The API response format may have changed.")
 
     def _extract_import_items(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         candidates = self._find_list_candidates(payload)

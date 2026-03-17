@@ -1,4 +1,6 @@
-# User Guide / 使用指南 — DSers MCP Product: How to Bulk Edit Variants with MCP
+# User Guide / 使用指南 — DSers MCP Product (Python): How to Bulk Edit Variants with MCP
+
+> **Note:** The TypeScript version is now the primary maintained version. See [dsers-mcp-product](https://github.com/lofder/dsers-mcp-product).
 
 > [English](#english) | [中文](#中文)
 
