@@ -102,7 +102,7 @@ class PrivateDsersProvider(ImportProvider):
         ).resolve()
         session_file.parent.mkdir(parents=True, exist_ok=True)
 
-        os.environ.setdefault("DSERS_ENV", "test")
+        os.environ.setdefault("DSERS_ENV", "production")
         os.environ.setdefault("DSERS_SESSION_FILE", str(session_file))
 
         if str(self._vendor_dir) not in sys.path:
@@ -337,7 +337,9 @@ class PrivateDsersProvider(ImportProvider):
         )
         warnings.extend(await self._refresh_product_shipping_info(provider_state))
         warnings.extend(await self._attach_shipping_template_logistics(provider_state, store["store_ref"], push_args))
-        warnings.extend(await self._attach_store_shipping_profile(store["store_ref"], push_args, push_options))
+        warnings.extend(await self._attach_store_shipping_profile(
+            store, push_args, push_options, provider_state["import_item_id"],
+        ))
         push_payload = await self._call(
             self._product_handler,
             "dsers_push_to_store",
@@ -570,26 +572,49 @@ class PrivateDsersProvider(ImportProvider):
 
     async def _attach_store_shipping_profile(
         self,
-        store_ref: str,
+        store: Dict[str, Any],
         push_args: Dict[str, Any],
         push_options: Dict[str, Any],
+        import_item_id: Optional[str] = None,
     ) -> List[str]:
         """
         Attach Shopify DeliveryProfile to the push request. Without this,
         Shopify rejects the push with 'shipping profile not found'.
-        First tries the API; falls back to push_options if the API returns empty.
+
+        Fallback chain:
+          1. dsers_get_store_shipping_profile dedicated API
+          2. dsers_push_before_check pre-push validation response
+          3. push_options.store_shipping_profile manual override
+
+        Non-Shopify platforms (Wix, WooCommerce, etc.) do not require this
+        field and will skip the profile lookup entirely.
 
         将 Shopify DeliveryProfile 附加到推送请求。如果缺少此字段，
         Shopify 会以 'shipping profile not found' 拒绝推送。
-        优先尝试 API 查询；如果 API 返回为空则回退到 push_options 中的值。
+
+        回退链：
+          1. dsers_get_store_shipping_profile 专用 API
+          2. dsers_push_before_check 推送前校验响应
+          3. push_options.store_shipping_profile 手动覆盖
+
+        非 Shopify 平台（Wix、WooCommerce 等）不需要此字段，会完全跳过查询。
         """
         if push_args.get("storeShippingProfile"):
+            return []
+
+        store_ref = store.get("store_ref", "")
+        store_domain = store.get("domain", "")
+        store_name = store.get("display_name", store_ref)
+        is_shopify = ".myshopify.com" in store_domain or str(store.get("platform") or "").lower() == "shopify"
+
+        if not is_shopify:
             return []
 
         warnings: List[str] = []
         store_id = self._coerce_numeric_id(store_ref)
         profile_items: Optional[List[Dict[str, Any]]] = None
 
+        # Source 1: dedicated shipping profile API.
         try:
             payload = await self._call(
                 self._product_handler,
@@ -602,6 +627,25 @@ class PrivateDsersProvider(ImportProvider):
         except Exception:
             warnings.append("Could not query store shipping profile from the provider API.")
 
+        # Source 2: push-before/check response.
+        if not profile_items and import_item_id:
+            try:
+                import_list_id = self._coerce_numeric_id(import_item_id)
+                check_payload = await self._call(
+                    self._product_handler,
+                    "dsers_push_before_check",
+                    {"importListIds": [import_list_id], "storeIds": [store_id]},
+                )
+                check_profiles = self._find_first_value_by_keys(
+                    check_payload, ["storeShippingProfile"],
+                )
+                if isinstance(check_profiles, list) and check_profiles:
+                    profile_items = check_profiles
+                    warnings.append("Obtained storeShippingProfile from push-before/check response.")
+            except Exception:
+                warnings.append("push-before/check fallback for shipping profile also failed.")
+
+        # Source 3: manual override from push_options.
         if not profile_items:
             fallback = push_options.get("store_shipping_profile")
             if isinstance(fallback, list) and fallback:
@@ -613,9 +657,11 @@ class PrivateDsersProvider(ImportProvider):
             warnings.append("Attached store shipping profile to the push request.")
         else:
             warnings.append(
-                "No store shipping profile available. The push may fail with "
-                "'shipping profile not found' if the target platform requires one. "
-                "Provide store_shipping_profile in push_options as a fallback."
+                f"Shopify store '{store_name}' ({store_domain}) has no Delivery Profile "
+                f"configured in DSers. The push will likely fail with 'shipping profile "
+                f"not found'. To fix: open DSers web UI → Settings → Shipping → configure "
+                f"a Delivery Profile for this store, or provide store_shipping_profile "
+                f"in push_options."
             )
 
         return warnings
@@ -794,11 +840,16 @@ class PrivateDsersProvider(ImportProvider):
             store_ref = self._first_present(item, ["storeId", "id", "sellerStoreId"])
             if not store_ref:
                 continue
+            domain = str(self._first_present(item, ["domain"]) or "")
+            platform = self._first_present(item, ["platform", "storeType"])
+            if not platform and ".myshopify.com" in domain:
+                platform = "shopify"
             stores.append(
                 {
                     "store_ref": str(store_ref),
                     "display_name": str(self._first_present(item, ["sellerName", "storeName", "name", "nickname"]) or store_ref),
-                    "platform": self._first_present(item, ["platform", "storeType"]),
+                    "platform": platform,
+                    "domain": domain,
                 }
             )
         return stores
