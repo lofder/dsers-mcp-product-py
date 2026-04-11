@@ -461,12 +461,41 @@ TOOLS = [
             "required": ["import_item_id"],
         },
     ),
+    # ── SKU remap tool (v1.5) ──
+    Tool(
+        name="dsers_sku_remap",
+        title="Replace Supplier (SKU Remap)",
+        description=(
+            "Replace the supplier on a store product with SKU-level variant matching. "
+            "Defaults to mode=preview (read-only). Two paths: "
+            "(A) STRICT — provide new_supplier_url to swap to that exact supplier. "
+            "(B) DISCOVER — omit new_supplier_url to auto-find the best replacement via image search. "
+            "Returns: path, summary (swapped/kept_old/unmatched), diffs, and optionally top_candidates."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dsers_product_id": {"type": "string", "description": "DSers product ID of the store product."},
+                "store_id": {"type": "string", "description": "Store ID from get_rule_capabilities."},
+                "new_supplier_url": {"type": "string", "description": "Optional. AliExpress/Alibaba URL of replacement supplier."},
+                "mode": {"type": "string", "enum": ["preview", "apply"], "default": "preview", "description": "preview (read-only) or apply (persist)."},
+                "country": {"type": "string", "default": "US", "description": "Target country code."},
+                "auto_confidence": {"type": "integer", "default": 70, "description": "Minimum match confidence 0-100."},
+                "max_candidates": {"type": "integer", "default": 5, "description": "Max candidates for discover mode."},
+            },
+            "required": ["dsers_product_id", "store_id"],
+        },
+    ),
 ]
 
 
 # ──────────────────────────────────────────────────────────────
 #  Handler dispatch / 处理器分发
 # ──────────────────────────────────────────────────────────────
+
+async def _handle_sku_remap(params: Dict[str, Any]) -> Dict[str, Any]:
+    from dsers_mcp_product.sku_remap_service import sku_remap
+    return await sku_remap(PROVIDER, SERVICE._store, params)
 
 async def _handle_find_product(params: Dict[str, Any]) -> Dict[str, Any]:
     from dsers_mcp_product.browse_service import discover_products
@@ -497,6 +526,7 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "dsers_import_list": _handle_import_list,
     "dsers_my_products": _handle_my_products,
     "dsers_product_delete": _handle_product_delete,
+    "dsers_sku_remap": _handle_sku_remap,
 }
 
 

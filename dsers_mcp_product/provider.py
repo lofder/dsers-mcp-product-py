@@ -84,6 +84,17 @@ class ImportProvider(ABC):
     async def get_store_pricing_rule(self, store_ref: str) -> Dict[str, Any]:
         return {"enabled": False}
 
+    # ── SKU remap methods (v1.5) ──
+
+    async def get_mapping(self, dsers_product_id: str) -> Dict[str, Any]:
+        return {}
+
+    async def save_mapping(self, dsers_product_id: str, mapping_body: Dict[str, Any]) -> Dict[str, Any]:
+        return {}
+
+    async def get_pool_product_detail(self, product_id: str, app_id: int, ship_to: str) -> Dict[str, Any]:
+        return {}
+
 
 def load_provider() -> ImportProvider:
     """
