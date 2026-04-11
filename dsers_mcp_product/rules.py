@@ -26,8 +26,8 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Set
 
 # --- Known keys for each rule family / 各规则族的已知键 ---
-_KNOWN_TOP_LEVEL_RULE_KEYS = {"pricing", "content", "images", "instruction_text"}
-_KNOWN_PRICING_KEYS = {"mode", "multiplier", "fixed_markup", "round_digits"}
+_KNOWN_TOP_LEVEL_RULE_KEYS = {"pricing", "content", "images", "variant_overrides", "option_edits", "instruction_text"}
+_KNOWN_PRICING_KEYS = {"mode", "multiplier", "fixed_markup", "fixed_price", "round_digits"}
 _KNOWN_CONTENT_KEYS = {
     "title_override",
     "title_prefix",
@@ -37,7 +37,9 @@ _KNOWN_CONTENT_KEYS = {
     "tags_add",
 }
 _KNOWN_IMAGE_KEYS = {"keep_first_n", "drop_indexes", "translate_image_text", "remove_logo"}
-_DEFAULT_PRICING_MODES = {"provider_default", "multiplier", "fixed_markup"}
+_DEFAULT_PRICING_MODES = {"provider_default", "multiplier", "fixed_markup", "fixed_price"}
+_KNOWN_VARIANT_OVERRIDE_KEYS = {"match", "sell_price", "compare_at_price", "stock", "title", "image_url"}
+_KNOWN_OPTION_EDIT_ACTIONS = {"rename_option", "rename_value", "remove_value", "remove_option"}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -85,6 +87,14 @@ def normalize_rules(rules: Dict[str, Any], rule_capabilities: Optional[Dict[str,
     if images:
         effective_rules["images"] = images
 
+    variant_overrides = _normalize_variant_overrides(requested_rules.get("variant_overrides"), warnings, errors)
+    if variant_overrides:
+        effective_rules["variant_overrides"] = variant_overrides
+
+    option_edits = _normalize_option_edits(requested_rules.get("option_edits"), warnings, errors)
+    if option_edits:
+        effective_rules["option_edits"] = option_edits
+
     # instruction_text is stored for operator context but not auto-applied.
     # instruction_text 仅为操作者上下文存储，不会自动应用。
     instruction_text = requested_rules.get("instruction_text")
@@ -131,6 +141,19 @@ def apply_rules(draft: Dict[str, Any], rules: Dict[str, Any]) -> Dict[str, Any]:
     images = rules.get("images") or {}
     if images:
         _apply_image_rules(draft, images, summary)
+
+    variant_overrides = rules.get("variant_overrides")
+    if isinstance(variant_overrides, list) and variant_overrides:
+        _apply_variant_overrides(draft, variant_overrides, summary)
+
+    option_edits = rules.get("option_edits")
+    if isinstance(option_edits, list) and option_edits:
+        _apply_option_edits(draft, option_edits, summary)
+
+    # Recalculate total_inventory after option_edits may have removed variants
+    variants = draft.get("variants") or []
+    if variants:
+        draft["total_inventory"] = sum(int(v.get("stock") or 0) for v in variants)
 
     instruction_text = rules.get("instruction_text")
     if instruction_text:
@@ -208,6 +231,21 @@ def _normalize_pricing_rules(
                 f"pricing.fixed_markup is ${markup} — this is an unusually high markup. Is this intentional?"
             )
         normalized["fixed_markup"] = markup
+    elif mode == "fixed_price":
+        fixed_price = _as_float(pricing.get("fixed_price"), None)
+        if fixed_price is None:
+            errors.append("pricing.fixed_price must be a number (in dollars) when pricing.mode='fixed_price'.")
+            return {}
+        if fixed_price < 0:
+            errors.append("pricing.fixed_price must be >= 0.")
+            return {}
+        if fixed_price == 0:
+            warnings.append("pricing.fixed_price is $0 — the product will be free. Is this intentional?")
+        if fixed_price > 10000:
+            warnings.append(
+                f"pricing.fixed_price is ${fixed_price} — this is an unusually high price. Is this intentional?"
+            )
+        normalized["fixed_price"] = fixed_price
 
     if mode != "provider_default":
         round_digits = pricing.get("round_digits", 2)
@@ -358,21 +396,25 @@ def _apply_pricing_rules(draft: Dict[str, Any], pricing: Dict[str, Any], summary
 
     multiplier = _as_float(pricing.get("multiplier"), 1.0)
     markup = _as_float(pricing.get("fixed_markup"), 0.0)
+    fixed_price = _as_float(pricing.get("fixed_price"), 0.0)
     round_digits = int(pricing.get("round_digits", 2))
 
     variants = draft.get("variants") or []
     changed = 0
     for variant in variants:
-        base = _first_price(variant)
-        if base is None:
-            continue
-        if mode == "multiplier":
-            new_price = round(base * multiplier, round_digits)
-        elif mode == "fixed_markup":
-            new_price = round(base + markup, round_digits)
+        if mode == "fixed_price":
+            new_price = round(fixed_price, round_digits)
         else:
-            summary["warnings"].append(f"Unsupported pricing mode '{mode}' was ignored.")
-            return
+            base = _first_price(variant)
+            if base is None:
+                continue
+            if mode == "multiplier":
+                new_price = round(base * multiplier, round_digits)
+            elif mode == "fixed_markup":
+                new_price = round(base + markup, round_digits)
+            else:
+                summary["warnings"].append(f"Unsupported pricing mode '{mode}' was ignored.")
+                return
         variant["offer_price"] = new_price
         changed += 1
 
@@ -438,6 +480,256 @@ def _apply_image_rules(draft: Dict[str, Any], images: Dict[str, Any], summary: D
     summary["applied"].append(
         {"rule_family": "images", "image_count_before": original_count, "image_count_after": len(image_list)}
     )
+
+
+# ──────────────────────────────────────────────────────────────
+#  Variant overrides / 变体覆盖规则
+# ──────────────────────────────────────────────────────────────
+
+def _normalize_variant_overrides(overrides: Any, warnings: List[str], errors: List[str]) -> Optional[List[Dict[str, Any]]]:
+    if overrides is None:
+        return None
+    if not isinstance(overrides, list):
+        errors.append("variant_overrides must be an array of objects, each with a 'match' field.")
+        return None
+    if not overrides:
+        return None
+    result: List[Dict[str, Any]] = []
+    for i, entry in enumerate(overrides):
+        if not isinstance(entry, dict):
+            warnings.append(f"variant_overrides[{i}] is not an object and was skipped.")
+            continue
+        match = str(entry.get("match") or "").strip()
+        if not match:
+            errors.append(f"variant_overrides[{i}].match is required (variant title or SKU substring to match).")
+            continue
+        normalized: Dict[str, Any] = {"match": match}
+        for key in sorted(entry):
+            if key not in _KNOWN_VARIANT_OVERRIDE_KEYS:
+                warnings.append(f"Unknown variant_overrides key '{key}' at index {i} was ignored.")
+                continue
+            if key == "match":
+                continue
+            if key in ("sell_price", "compare_at_price"):
+                val = _as_float(entry[key], None)
+                if val is None or val < 0:
+                    errors.append(f"variant_overrides[{i}].{key} must be a non-negative number (in dollars).")
+                    continue
+                normalized[key] = val
+            elif key == "stock":
+                val = _as_float(entry[key], None)
+                if val is None or val < 0 or int(val) != val:
+                    errors.append(f"variant_overrides[{i}].stock must be a non-negative integer.")
+                    continue
+                normalized[key] = int(val)
+            elif key == "title":
+                sv = str(entry[key] or "").strip()
+                if sv:
+                    normalized[key] = sv
+            elif key == "image_url":
+                sv = str(entry[key] or "").strip()
+                if sv:
+                    import re as _re
+                    if not _re.match(r"^https?://", sv, _re.IGNORECASE):
+                        errors.append(f"variant_overrides[{i}].image_url must be a valid URL starting with http:// or https://.")
+                        continue
+                    normalized[key] = sv
+        if len(normalized) > 1:
+            result.append(normalized)
+    return result if result else None
+
+
+def _apply_variant_overrides(draft: Dict[str, Any], overrides: List[Dict[str, Any]], summary: Dict[str, Any]) -> None:
+    variants = draft.get("variants") or []
+    if not variants:
+        return
+    matched = 0
+    for override in overrides:
+        pattern = str(override.get("match") or "").lower()
+        if not pattern:
+            continue
+        for v in variants:
+            title_lower = str(v.get("title") or "").lower()
+            sku_lower = str(v.get("sku") or "").lower()
+            if pattern not in title_lower and pattern not in sku_lower:
+                continue
+            if override.get("sell_price") is not None:
+                v["offer_price"] = override["sell_price"]
+            if override.get("compare_at_price") is not None:
+                v["compare_at_price"] = override["compare_at_price"]
+            if override.get("stock") is not None:
+                v["stock"] = override["stock"]
+            if override.get("title") is not None:
+                v["title"] = str(override["title"])
+            if override.get("image_url") is not None:
+                v["image_url"] = str(override["image_url"])
+            matched += 1
+    if matched:
+        summary["applied"].append({"rule_family": "variant_overrides", "variants_matched": matched})
+    else:
+        summary["warnings"].append(
+            "variant_overrides were provided but no variants matched. Check the 'match' values against variant titles/SKUs."
+        )
+
+
+# ──────────────────────────────────────────────────────────────
+#  Option edits / 选项编辑规则
+# ──────────────────────────────────────────────────────────────
+
+def _normalize_option_edits(raw: Any, warnings: List[str], errors: List[str]) -> Optional[List[Dict[str, Any]]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        errors.append("option_edits must be an array of edit actions.")
+        return None
+    result: List[Dict[str, Any]] = []
+    for i, edit in enumerate(raw):
+        if not isinstance(edit, dict):
+            errors.append(f"option_edits[{i}] must be an object.")
+            continue
+        action = str(edit.get("action") or "")
+        if action not in _KNOWN_OPTION_EDIT_ACTIONS:
+            errors.append(f"option_edits[{i}]: unknown action '{action}'. Allowed: {', '.join(sorted(_KNOWN_OPTION_EDIT_ACTIONS))}.")
+            continue
+        if not edit.get("option_name") or not isinstance(edit.get("option_name"), str):
+            errors.append(f"option_edits[{i}]: 'option_name' (string) is required.")
+            continue
+        if action in ("rename_value", "remove_value") and (not edit.get("value_name") or not isinstance(edit.get("value_name"), str)):
+            errors.append(f"option_edits[{i}]: '{action}' requires 'value_name' (string).")
+            continue
+        if action in ("rename_option", "rename_value") and (not edit.get("new_name") or not isinstance(edit.get("new_name"), str)):
+            errors.append(f"option_edits[{i}]: '{action}' requires 'new_name' (string).")
+            continue
+        result.append(edit)
+    return result if result else None
+
+
+def _apply_option_edits(draft: Dict[str, Any], edits: List[Dict[str, Any]], summary: Dict[str, Any]) -> None:
+    options: List[Dict[str, Any]] = draft.get("options") or []
+    variants: List[Dict[str, Any]] = draft.get("variants") or []
+    variants_removed = 0
+    renamed_options: Dict[str, str] = {}
+
+    for edit in edits:
+        action = edit["action"]
+        option_name = str(edit["option_name"])
+        opt = next((o for o in options if o.get("name") == option_name), None)
+        if opt is None:
+            new_name = renamed_options.get(option_name)
+            if new_name:
+                summary["warnings"].append(
+                    f"option_edits: option '{option_name}' was renamed to '{new_name}' by a prior edit — use '{new_name}' instead."
+                )
+            else:
+                summary["warnings"].append(f"option_edits: option '{option_name}' not found — skipped.")
+            continue
+
+        if action == "rename_option":
+            new_name = str(edit["new_name"])
+            renamed_options[option_name] = new_name
+            opt["name"] = new_name
+            for v in variants:
+                for ov in (v.get("option_values") or []):
+                    if ov.get("optionId") == opt.get("id"):
+                        ov["optionName"] = new_name
+
+        elif action == "rename_value":
+            value_name = str(edit["value_name"])
+            new_name = str(edit["new_name"])
+            val = next((v for v in (opt.get("values") or []) if v.get("name") == value_name), None)
+            if val is None:
+                summary["warnings"].append(f"option_edits: value '{value_name}' not found in option '{option_name}' — skipped.")
+                continue
+            val["name"] = new_name
+            for v in variants:
+                for ov in (v.get("option_values") or []):
+                    if ov.get("optionId") != opt.get("id"):
+                        continue
+                    id_match = val.get("id") and val["id"] != "" and ov.get("valueId") == val["id"]
+                    name_match = ov.get("valueName") == value_name
+                    if id_match or name_match:
+                        ov["valueName"] = new_name
+                _rebuild_variant_title(v)
+
+        elif action == "remove_value":
+            value_name = str(edit["value_name"])
+            values = opt.get("values") or []
+            val_idx = next((i for i, v in enumerate(values) if v.get("name") == value_name), -1)
+            if val_idx == -1:
+                summary["warnings"].append(f"option_edits: value '{value_name}' not found in option '{option_name}' — skipped.")
+                continue
+            removed_val = values.pop(val_idx)
+            before = len(variants)
+            variants[:] = [
+                v for v in variants
+                if not any(
+                    ov.get("optionId") == opt.get("id") and (
+                        (removed_val.get("id") and removed_val["id"] != "" and ov.get("valueId") == removed_val["id"])
+                        or ov.get("valueName") == value_name
+                    )
+                    for ov in (v.get("option_values") or [])
+                )
+            ]
+            variants_removed += before - len(variants)
+
+        elif action == "remove_option":
+            opt_idx = next((i for i, o in enumerate(options) if o.get("id") == opt.get("id")), -1)
+            if opt_idx != -1:
+                options.pop(opt_idx)
+            for v in variants:
+                v["option_values"] = [ov for ov in (v.get("option_values") or []) if ov.get("optionId") != opt.get("id")]
+                _rebuild_variant_title(v)
+
+    draft["variants"] = variants
+    draft["options"] = options
+    entry: Dict[str, Any] = {"rule_family": "option_edits", "edits_count": len(edits)}
+    if variants_removed > 0:
+        entry["variants_removed"] = variants_removed
+        entry["variants_remaining"] = len(variants)
+    summary["applied"].append(entry)
+
+
+def _rebuild_variant_title(v: Dict[str, Any]) -> None:
+    option_values = v.get("option_values")
+    if not option_values:
+        return
+    original = str(v.get("title") or "")
+    sep = " / " if " / " in original else "-" if "-" in original else " / "
+    v["title"] = sep.join(ov.get("valueName", "") for ov in option_values)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Rule merging / 规则合并
+# ──────────────────────────────────────────────────────────────
+
+def merge_rules(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge incoming rules into existing rules (incremental update).
+
+    - pricing / images / variant_overrides / option_edits: replace entire family
+    - content: merge by individual field
+    - null value for a family: remove that family
+    """
+    merged = deepcopy(existing)
+    for key, value in incoming.items():
+        if value is None:
+            merged.pop(key, None)
+        elif key == "content":
+            existing_content = merged.get("content") or {}
+            if isinstance(value, dict):
+                for ck, cv in value.items():
+                    if cv is None or cv == "":
+                        existing_content.pop(ck, None)
+                    else:
+                        existing_content[ck] = cv
+                if existing_content:
+                    merged["content"] = existing_content
+                else:
+                    merged.pop("content", None)
+            else:
+                merged["content"] = value
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 # ──────────────────────────────────────────────────────────────
