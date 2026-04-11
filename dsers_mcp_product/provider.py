@@ -64,6 +64,26 @@ class ImportProvider(ABC):
     ) -> Dict[str, Any]:
         raise NotImplementedError
 
+    # ── Browse / search methods (v1.5) ──
+
+    async def find_products(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {"items": [], "search_after": ""}
+
+    async def list_import_items(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {"items": [], "total": 0}
+
+    async def list_my_products(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {"items": [], "total": 0}
+
+    async def delete_import_item(self, import_item_id: str) -> Dict[str, Any]:
+        return {}
+
+    async def save_draft(self, provider_state: Dict[str, Any], draft: Dict[str, Any]) -> Dict[str, Any]:
+        return {"warnings": []}
+
+    async def get_store_pricing_rule(self, store_ref: str) -> Dict[str, Any]:
+        return {"enabled": False}
+
 
 def load_provider() -> ImportProvider:
     """

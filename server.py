@@ -361,12 +361,103 @@ TOOLS = [
             "required": ["job_id"],
         },
     ),
+    # ── Browse / search tools (v1.5) ──
+    Tool(
+        name="dsers_find_product",
+        title="Search DSers Product Pool",
+        description=(
+            "Search the DSers product pool (AliExpress supplier catalog) for products to import by keyword or image URL. "
+            "Returns products that can be directly imported via prepare_import_candidate using the import_url field. "
+            "Use search_after from the response to get the next page. "
+            "Note: results may overlap between pages — deduplicate by product_id if needed. "
+            "Empty or whitespace-only keywords are rejected."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "keyword": {"type": "string", "description": "Search keyword. Omit when using image_url."},
+                "image_url": {"type": "string", "description": "Image URL for visual search. Mutually exclusive with keyword."},
+                "limit": {"type": "integer", "default": 20, "description": "Results per page (max 50)"},
+                "search_after": {"type": "string", "description": "Cursor from previous response for pagination"},
+                "sort": {"type": "string", "enum": ["relevance", "newest", "price"], "description": "Sort order"},
+                "ship_to": {"type": "string", "default": "US", "description": "Destination country code"},
+                "ship_from": {"type": "string", "description": "Origin country code (CN, US, FR, UK)"},
+                "category_id": {"type": "string", "description": "Category ID filter"},
+            },
+        },
+    ),
+    Tool(
+        name="dsers_import_list",
+        title="Browse Import List",
+        description=(
+            "Browse the DSers import list with enriched variant data. "
+            "Returns per item: import_item_id, title, sell_price_range, cost_range, variant_count, total_stock, push_status. "
+            "This is the staging area before push. To see products already on your store, use dsers_my_products."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer", "default": 1, "description": "Page number (1-based)."},
+                "page_size": {"type": "integer", "default": 20, "description": "Items per page. Max: 100."},
+            },
+        },
+    ),
+    Tool(
+        name="dsers_my_products",
+        title="Browse My Products",
+        description=(
+            "Browse products already pushed to a store. Requires store_id (from get_rule_capabilities). "
+            "Returns: dsers_product_id, title, sell_price, cost, status, supplier, supplier_url."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "store_id": {"type": "string", "description": "Store ID from get_rule_capabilities. Required."},
+                "page": {"type": "integer", "default": 1, "description": "Page number."},
+                "page_size": {"type": "integer", "default": 20, "description": "Items per page. Max: 100."},
+            },
+            "required": ["store_id"],
+        },
+    ),
+    Tool(
+        name="dsers_product_delete",
+        title="Delete Import List Item",
+        description=(
+            "Permanently delete a product from the DSers import list. IRREVERSIBLE. "
+            "Requires confirm=true to execute. Products already pushed to stores are NOT affected. "
+            "First call without confirm to get a confirmation prompt."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "import_item_id": {"type": "string", "description": "Import item ID from dsers_import_list or dsers_product_preview."},
+                "confirm": {"type": "boolean", "default": False, "description": "Set true to confirm deletion."},
+            },
+            "required": ["import_item_id"],
+        },
+    ),
 ]
 
 
 # ──────────────────────────────────────────────────────────────
 #  Handler dispatch / 处理器分发
 # ──────────────────────────────────────────────────────────────
+
+async def _handle_find_product(params: Dict[str, Any]) -> Dict[str, Any]:
+    from dsers_mcp_product.browse_service import discover_products
+    return await discover_products(PROVIDER, params)
+
+async def _handle_import_list(params: Dict[str, Any]) -> Dict[str, Any]:
+    from dsers_mcp_product.browse_service import browse_import_list
+    return await browse_import_list(PROVIDER, params)
+
+async def _handle_my_products(params: Dict[str, Any]) -> Dict[str, Any]:
+    from dsers_mcp_product.browse_service import browse_my_products
+    return await browse_my_products(PROVIDER, params)
+
+async def _handle_product_delete(params: Dict[str, Any]) -> Dict[str, Any]:
+    from dsers_mcp_product.browse_service import delete_import_item
+    return await delete_import_item(PROVIDER, params)
 
 _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "get_rule_capabilities": SERVICE.get_rule_capabilities,
@@ -376,6 +467,10 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "set_product_visibility": SERVICE.set_product_visibility,
     "confirm_push_to_store": SERVICE.confirm_push_to_store,
     "get_job_status": SERVICE.get_job_status,
+    "dsers_find_product": _handle_find_product,
+    "dsers_import_list": _handle_import_list,
+    "dsers_my_products": _handle_my_products,
+    "dsers_product_delete": _handle_product_delete,
 }
 
 

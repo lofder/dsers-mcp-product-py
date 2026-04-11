@@ -163,6 +163,50 @@ class MockImportProvider(ImportProvider):
         }
 
 
+    async def find_products(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "items": [
+                {
+                    "product_id": "1005001234567890",
+                    "title": "Sample Phone Case",
+                    "image": "https://example.com/phone-case.jpg",
+                    "min_price": 150,
+                    "max_price": 350,
+                    "rating": 4.8,
+                    "orders": 1200,
+                    "logistics_cost": 0,
+                    "app_id": "159831080",
+                }
+            ],
+            "search_after": "",
+        }
+
+    async def list_import_items(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "items": [
+                {
+                    "import_item_id": "mock-import-1",
+                    "title": "Sample Wireless Charger",
+                    "sell_price_range": "$8.90 – $9.10",
+                    "cost_range": "$4.20 – $4.40",
+                    "variant_count": 2,
+                    "total_stock": 1000,
+                    "push_status": "not_pushed",
+                }
+            ],
+            "total": 1,
+        }
+
+    async def list_my_products(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {"items": [], "total": 0}
+
+    async def delete_import_item(self, import_item_id: str) -> Dict[str, Any]:
+        return {"deleted": True}
+
+    async def save_draft(self, provider_state: Dict[str, Any], draft: Dict[str, Any]) -> Dict[str, Any]:
+        return {"warnings": []}
+
+
 def build_provider() -> ImportProvider:
     """
     Factory function required by the provider loader.
