@@ -26,7 +26,7 @@ from dsers_mcp_product.job_store import FileJobStore
 from dsers_mcp_product.provider import ImportProvider
 from dsers_mcp_product.push_options import normalize_push_options
 from dsers_mcp_product.resolver import resolve_source_url
-from dsers_mcp_product.rules import apply_rules, normalize_rules
+from dsers_mcp_product.rules import apply_rules, normalize_rules, merge_rules
 
 
 class ImportFlowService:
@@ -221,6 +221,75 @@ class ImportFlowService:
         job = self._store.load(job_id)
         return self._preview(job)
 
+    async def update_rules(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Re-apply rules to an existing job without re-importing.
+        Rules are merged incrementally: pricing/images/variant_overrides replace by family;
+        content merges by field.
+        """
+        job_id = str(payload.get("job_id") or "").strip()
+        if not job_id:
+            raise ValueError(
+                "job_id is required. RECOVERY: Use the job_id from prepare_import_candidate. "
+                "If lost, re-import the product."
+            )
+        job = self._store.load(job_id)
+        if not job.get("original_draft"):
+            raise ValueError(
+                "Cannot re-apply rules: original draft data has expired. "
+                "RECOVERY: Re-import the product with prepare_import_candidate."
+            )
+
+        existing_rules = job.get("effective_rules_snapshot") or job.get("rules") or {}
+        incoming_rules = payload.get("rules") or {}
+        merged = merge_rules(existing_rules, incoming_rules)
+
+        target_store = payload.get("target_store") or job.get("target_store")
+        caps = await self._provider.get_rule_capabilities(target_store)
+        validated = normalize_rules(merged, caps.get("rule_families"))
+        if validated.get("errors"):
+            raise ValueError(
+                "Rule validation failed: " + "; ".join(validated["errors"]) +
+                " RECOVERY: Fix the rule parameters and retry."
+            )
+
+        effective_rules = validated.get("effective_rules") or {}
+        ruled = apply_rules(job["original_draft"], effective_rules)
+
+        job["draft"] = ruled["draft"]
+        job["requested_rules"] = validated.get("requested_rules") or {}
+        job["effective_rules_snapshot"] = effective_rules
+        job["rules"] = effective_rules
+        job["rule_summary"] = ruled.get("summary") or {}
+        job["status"] = "preview_ready"
+        job["updated_at"] = _utc_now()
+        if payload.get("target_store"):
+            job["target_store"] = payload["target_store"]
+        if payload.get("visibility_mode"):
+            job["visibility_mode"] = payload["visibility_mode"]
+
+        save_warnings: List[str] = []
+        try:
+            save_result = await self._provider.save_draft(
+                job.get("provider_state") or {}, job["draft"]
+            )
+            save_warnings.extend(save_result.get("warnings") or [])
+        except Exception:
+            job["status"] = "persist_failed"
+            save_warnings.append(
+                "CRITICAL: Rules were applied locally but failed to save to DSers backend. "
+                "Pushing this job will use OLD rules. Re-import the product or retry rule update."
+            )
+
+        job["warnings"] = [
+            f"Rule re-applied at {job['updated_at']}",
+            *(validated.get("warnings") or []),
+            *((ruled.get("summary") or {}).get("warnings") or []),
+            *save_warnings,
+        ]
+        self._store.save(job_id, job)
+        return self._preview(job)
+
     async def set_product_visibility(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Change visibility_mode (backend_only / sell_immediately) before confirmation.
@@ -289,6 +358,15 @@ class ImportFlowService:
             raise ValueError("job_id is required")
 
         job = self._store.load(job_id)
+
+        # Block push if rule persistence failed
+        if job.get("status") == "persist_failed":
+            raise ValueError(
+                "push_blocked_persist_failed: Rules were applied locally but failed to persist to DSers backend. "
+                "Pushing now would use OLD rules. "
+                "RECOVERY: Call update_rules to retry, or re-import the product."
+            )
+
         target_store = payload.get("target_store") or job.get("target_store")
         visibility_mode = payload.get("visibility_mode") or job.get("visibility_mode") or "backend_only"
         provider_caps = await self._provider.get_rule_capabilities(target_store=target_store)
@@ -300,6 +378,16 @@ class ImportFlowService:
         if push_option_check.get("errors"):
             raise ValueError("; ".join(push_option_check["errors"]))
         effective_push_options = push_option_check.get("effective_push_options", {})
+        force_push = bool(payload.get("force_push") or effective_push_options.get("force_push"))
+
+        # Pre-push safety checks
+        from dsers_mcp_product.push_guard import validate_push_safety
+        safety = validate_push_safety(job.get("draft") or {}, job.get("original_draft"))
+        if safety["blocked"] and not force_push:
+            raise ValueError(
+                "push_blocked_by_safety_check: " + " | ".join(safety["blocked"]) +
+                " RECOVERY: Fix pricing with update_rules, or set force_push=true after confirming the risk."
+            )
 
         result = await self._provider.commit_candidate(
             provider_state=job["provider_state"],

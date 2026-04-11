@@ -340,6 +340,10 @@ TOOLS = [
                         "only_push_specifications": {"type": "boolean", "description": "Push only variant specs without images/descriptions. Default: false."},
                     },
                 },
+                "force_push": {
+                    "type": "boolean",
+                    "description": "Override pre-push safety checks. ONLY set true after showing the user the specific risk and getting explicit consent.",
+                },
             },
             "required": [],
         },
@@ -357,6 +361,27 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "job_id": {"type": "string", "description": "Job ID from prepare_import_candidate or confirm_push_to_store."},
+            },
+            "required": ["job_id"],
+        },
+    ),
+    # ── Rule update tool (v1.5) ──
+    Tool(
+        name="dsers_product_update_rules",
+        title="Update Product Rules",
+        description=(
+            "Update pricing, content, images, or variant rules on an already-imported product. "
+            "Rules are merged incrementally: pricing/images/variant_overrides replace by family; "
+            "content merges by field. To clear a content field, send empty string. To remove an entire family, pass null. "
+            "If rule persistence to DSers backend fails, job status is set to persist_failed and subsequent push will be blocked."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "Job ID from prepare_import_candidate."},
+                "rules": {"type": "object", "description": "Rules object (pricing, content, images, variant_overrides, option_edits)."},
+                "target_store": {"type": "string", "description": "Target store ID or name."},
+                "visibility_mode": {"type": "string", "description": "backend_only or sell_immediately."},
             },
             "required": ["job_id"],
         },
@@ -467,6 +492,7 @@ _HANDLERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "set_product_visibility": SERVICE.set_product_visibility,
     "confirm_push_to_store": SERVICE.confirm_push_to_store,
     "get_job_status": SERVICE.get_job_status,
+    "dsers_product_update_rules": SERVICE.update_rules,
     "dsers_find_product": _handle_find_product,
     "dsers_import_list": _handle_import_list,
     "dsers_my_products": _handle_my_products,
