@@ -193,12 +193,20 @@ def _normalize_pricing_rules(
         if multiplier is None:
             errors.append("pricing.multiplier must be a number when pricing.mode='multiplier'.")
             return {}
+        if multiplier > 100:
+            warnings.append(
+                f"pricing.multiplier is {multiplier}x — this will set sell price to {multiplier}x the cost. Is this intentional?"
+            )
         normalized["multiplier"] = multiplier
     elif mode == "fixed_markup":
         markup = _as_float(pricing.get("fixed_markup"), None)
         if markup is None:
             errors.append("pricing.fixed_markup must be a number when pricing.mode='fixed_markup'.")
             return {}
+        if markup > 500:
+            warnings.append(
+                f"pricing.fixed_markup is ${markup} — this is an unusually high markup. Is this intentional?"
+            )
         normalized["fixed_markup"] = markup
 
     if mode != "provider_default":
@@ -254,7 +262,17 @@ def _normalize_content_rules(
             continue
         if value in (None, ""):
             continue
-        normalized[key] = str(value)
+        sv = str(value)
+        if key in ("description_override_html", "description_append_html"):
+            from .security import contains_dangerous_html
+            if contains_dangerous_html(sv):
+                errors.append(
+                    f"content.{key} contains potentially dangerous HTML (script, iframe, event handlers, or javascript: URLs). "
+                    "This content would be rendered in the storefront and could execute in buyers' browsers. "
+                    "Remove dangerous tags and attributes before retrying."
+                )
+                continue
+        normalized[key] = sv
 
     return normalized
 

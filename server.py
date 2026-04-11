@@ -397,8 +397,9 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResult:
         data = await handler(arguments or {})
         return CallToolResult(content=_reply_json(data), isError=False)
     except Exception as exc:
+        from dsers_mcp_product.security import sanitize_error
         return CallToolResult(
-            content=[TextContent(type="text", text=str(exc))],
+            content=[TextContent(type="text", text=sanitize_error(str(exc)))],
             isError=True,
         )
 

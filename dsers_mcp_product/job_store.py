@@ -18,6 +18,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict
 
+from .security import validate_job_id
+
 
 class FileJobStore:
     """
@@ -56,4 +58,5 @@ class FileJobStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def _job_path(self, job_id: str) -> Path:
-        return self._root / f"{job_id}.json"
+        safe_id = validate_job_id(job_id)
+        return self._root / f"{safe_id}.json"
