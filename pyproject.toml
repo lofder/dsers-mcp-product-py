@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "dsers-mcp-product-py"
-version = "1.5.2"
+version = "1.5.7"
 description = "Dropshipping automation with AI — import AliExpress/Alibaba products to Shopify & Wix via DSers. Open-source MCP server."
 readme = "README.md"
 requires-python = ">=3.10"

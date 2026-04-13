@@ -305,10 +305,10 @@ class PrivateDsersProvider(ImportProvider):
 
         update_args[title_key] = draft.get("title")
         update_args[description_key] = draft.get("description_html")
-        if tags_key:
-            update_args[tags_key] = draft.get("tags") or []
-        elif draft.get("tags"):
-            warnings.append("Tag edits were skipped because the DSers import list API does not support direct tag writes for this item type.")
+        # Tags are NOT written through the import-list PUT endpoint — DSers BFF uses
+        # protobuf encoding and rejects string arrays in the tags field (CODEC error).
+        if draft.get("tags"):
+            warnings.append("Tag edits are stored locally but not written to DSers via the import list update API. Tags will be applied when pushed.")
 
         variants_key = field_map.get("variants_key")
         if variants_key and field_map.get("raw_variants"):
@@ -365,13 +365,14 @@ class PrivateDsersProvider(ImportProvider):
         status_payload: Optional[Dict[str, Any]] = None
         if event_id:
             try:
-                for attempt in range(4):
+                delays = [1, 2, 4, 8, 15]
+                for attempt, delay in enumerate(delays):
                     status_payload = await self._call(self._product_handler, "dsers_get_push_status", {"event_id": event_id})
                     push_state = self._extract_push_state(status_payload)
                     if push_state in {"failed", "completed"}:
                         break
-                    if attempt < 3:
-                        await asyncio.sleep(10)
+                    if attempt < len(delays) - 1:
+                        await asyncio.sleep(delay)
             except Exception:
                 warnings.append("Push status polling could not complete. The push may still be processing — call get_job_status later to check.")
         if push_state == "failed":
@@ -398,6 +399,54 @@ class PrivateDsersProvider(ImportProvider):
                 "variant_count": len(draft.get("variants") or []),
             },
         }
+
+    async def save_draft(
+        self,
+        provider_state: Dict[str, Any],
+        draft: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Persist draft changes (title, description, variants, images) back to DSers import list."""
+        field_map = provider_state.get("field_map") or {}
+        warnings: List[str] = []
+
+        update_args: Dict[str, Any] = {"id": provider_state["import_item_id"]}
+        title_key = field_map.get("title_key") or "title"
+        description_key = field_map.get("description_key") or "description"
+
+        update_args[title_key] = draft.get("title")
+        update_args[description_key] = draft.get("description_html")
+
+        # Tags are NOT written — DSers BFF protobuf rejects string arrays (CODEC error)
+        if draft.get("tags"):
+            warnings.append("Tag edits are stored locally but not written via the import list update API.")
+
+        variants_key = field_map.get("variants_key")
+        if variants_key and field_map.get("raw_variants"):
+            update_args[variants_key] = self._denormalize_variants(draft.get("variants") or [], field_map)
+            price_edit_flag_key = field_map.get("price_edit_flag_key")
+            if price_edit_flag_key:
+                update_args[price_edit_flag_key] = True
+            supply_key = field_map.get("supply_key")
+            if supply_key and field_map.get("raw_supply"):
+                update_args[supply_key] = self._denormalize_supply(draft.get("variants") or [], field_map)
+            price_bounds = self._compute_price_bounds(draft.get("variants") or [])
+            min_price_key = field_map.get("min_price_key")
+            max_price_key = field_map.get("max_price_key")
+            if min_price_key and price_bounds[0] is not None:
+                update_args[min_price_key] = price_bounds[0]
+            if max_price_key and price_bounds[1] is not None:
+                update_args[max_price_key] = price_bounds[1]
+
+        images_key = field_map.get("images_key")
+        if images_key and field_map.get("images_mode") in {"string_list", "dict_list"}:
+            update_args[images_key] = self._denormalize_images(draft.get("images") or [], field_map)
+            main_image_key = field_map.get("main_image_key")
+            if main_image_key:
+                update_args[main_image_key] = (draft.get("images") or [None])[0]
+
+        update_payload = await self._call(self._product_handler, "dsers_update_import_list_item", update_args)
+        self._raise_if_error(update_payload, "Could not save the updated product draft.")
+        return {"warnings": warnings}
 
     # ── Internal helpers / 内部辅助方法 ──
 
