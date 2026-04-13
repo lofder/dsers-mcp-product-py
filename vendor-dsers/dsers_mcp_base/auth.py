@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Windows
 import json
 import time
 from pathlib import Path
@@ -68,15 +71,17 @@ class DSersAuth:
             return None
         try:
             with p.open("r") as fh:
-                fcntl.flock(fh, fcntl.LOCK_SH)
+                if fcntl:
+                    fcntl.flock(fh, fcntl.LOCK_SH)
                 obj = json.load(fh)
-                fcntl.flock(fh, fcntl.LOCK_UN)
+                if fcntl:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
             ts = obj.get("ts", 0)
             if time.time() - ts > _SESSION_TTL:
                 return None
             return obj["session_id"], obj.get("state", ""), ts
         except Exception:
-            return None
+            return None  # intentionally suppressed — corrupt or unreadable cache is treated as absent
 
     def _write_cache(self) -> None:
         p = self._config.session_file
@@ -87,6 +92,8 @@ class DSersAuth:
             "ts": self._fetched_at,
         })
         with p.open("w") as fh:
-            fcntl.flock(fh, fcntl.LOCK_EX)
+            if fcntl:
+                fcntl.flock(fh, fcntl.LOCK_EX)
             fh.write(payload)
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            if fcntl:
+                fcntl.flock(fh, fcntl.LOCK_UN)

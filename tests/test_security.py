@@ -75,9 +75,17 @@ class TestValidateUrl:
         assert validate_url("https://example.com") == "https://example.com"
 
     def test_file_protocol_blocked(self):
-        with pytest.raises(ValueError, match="Unsafe URL"):
+        with pytest.raises(ValueError, match="Only http"):
             validate_url("file:///etc/passwd")
 
     def test_data_protocol_blocked(self):
-        with pytest.raises(ValueError, match="Unsafe URL"):
+        with pytest.raises(ValueError, match="Only http"):
             validate_url("data:text/html,<script>alert(1)</script>")
+
+    def test_private_ip_blocked(self):
+        with pytest.raises(ValueError, match="Private"):
+            validate_url("http://127.0.0.1/admin")
+
+    def test_ftp_blocked(self):
+        with pytest.raises(ValueError, match="Only http"):
+            validate_url("ftp://evil.com/file")

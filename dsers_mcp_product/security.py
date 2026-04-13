@@ -57,9 +57,27 @@ def sanitize_error(msg: str) -> str:
 
 
 def validate_url(url: str) -> str:
-    """Validate URL scheme — block file:// and data: protocols."""
+    """Validate URL scheme (whitelist http/https) and block private IPs."""
+    import ipaddress
+    from urllib.parse import urlparse
+
     stripped = url.strip()
     lower = stripped.lower()
-    if lower.startswith("file://") or lower.startswith("data:"):
-        raise ValueError(f"Unsafe URL scheme: {stripped[:30]}")
+    if not (lower.startswith("http://") or lower.startswith("https://")):
+        raise ValueError(f"Only http:// and https:// URLs are allowed, got: {stripped[:30]}")
+    # Block private / loopback / link-local IPs to prevent SSRF
+    try:
+        host = urlparse(stripped).hostname
+        if host:
+            try:
+                addr = ipaddress.ip_address(host)
+            except ValueError:
+                pass  # hostname, not IP literal — OK
+            else:
+                if addr.is_private or addr.is_loopback or addr.is_link_local:
+                    raise ValueError(f"Private/loopback IP not allowed: {host}")
+    except ValueError:
+        raise  # re-raise validation errors
+    except Exception:
+        pass  # urlparse failures — let the URL through
     return stripped

@@ -132,6 +132,8 @@ def normalize_push_options(
         if key == "store_shipping_profile":
             if isinstance(value, list) or value is None:
                 effective_push_options[key] = value
+            elif isinstance(value, str):
+                effective_push_options[key] = [value]
             continue
 
         if key == "sales_channels":

@@ -14,6 +14,8 @@ making it safe for concurrent access across separate requests.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Dict
@@ -43,9 +45,26 @@ class FileJobStore:
     def save(self, job_id: str, payload: Dict[str, Any]) -> None:
         """
         Overwrite the stored state for an existing job.
+        Uses write-to-temp-then-rename for atomicity.
         覆盖已有任务的存储状态。
+        使用先写临时文件再重命名的方式确保原子性。
         """
-        self._job_path(job_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        # TODO(PY-P2-07): Add job TTL — old jobs are never cleaned up.
+        path = self._job_path(job_id)
+        fd, tmp = tempfile.mkstemp(dir=str(self._root), suffix=".tmp")
+        try:
+            os.write(fd, json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"))
+            os.close(fd)
+            fd = -1  # mark as closed
+            os.replace(tmp, str(path))
+        except BaseException:
+            if fd != -1:
+                os.close(fd)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass  # intentionally suppressed — best-effort cleanup
+            raise
 
     def load(self, job_id: str) -> Dict[str, Any]:
         """

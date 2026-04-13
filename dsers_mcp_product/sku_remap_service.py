@@ -101,7 +101,7 @@ async def sku_remap(
         if not candidate_variants:
             return {"path": path, "error": "Candidate supplier has no usable variants."}
 
-        match_output = match_variants(current_variants, candidate_variants, auto_confidence)
+        match_output = await match_variants(current_variants, candidate_variants, auto_confidence)
     else:
         # ==============================================================
         # Path B: discover -- search by image, rank candidates
@@ -124,7 +124,7 @@ async def sku_remap(
                 "top_candidates": [],
             }
 
-        best_match: Optional[Dict[str, Any]] = None
+        best_match: Optional[Any] = None
         best_score: float = 0
         best_candidate_variants: List[Dict[str, Any]] = []
         top_candidates = []
@@ -138,15 +138,15 @@ async def sku_remap(
                 if not cand_variants:
                     continue
 
-                m_output = match_variants(current_variants, cand_variants, auto_confidence)
+                m_output = await match_variants(current_variants, cand_variants, auto_confidence)
                 avg = _avg_confidence(m_output)
 
                 top_candidates.append({
                     "product_id": product_id,
                     "title": cand.get("title", ""),
                     "avg_score": avg,
-                    "matched": len(m_output.get("matches") or []),
-                    "unmatched": len(m_output.get("unmatched_store") or []),
+                    "matched": len(m_output.matches),
+                    "unmatched": len(m_output.unmatched_store),
                 })
 
                 if avg > best_score:
@@ -342,18 +342,18 @@ def _get_seed_images(mapping: Dict[str, Any]) -> List[str]:
 # Helper: average match confidence
 # ---------------------------------------------------------------------------
 
-def _avg_confidence(match_output: Dict[str, Any]) -> float:
+def _avg_confidence(match_output: Any) -> float:
     """
     Compute the average confidence across all matched pairs.
 
-    The match_output dict is expected to contain a "matches" list where each
-    entry has a "confidence" key.  Falls back to 0.0 when there are no
-    matches.
+    The match_output is a SkuMatchOutput dataclass with a ``matches`` list
+    where each entry has a ``confidence`` attribute.  Falls back to 0.0
+    when there are no matches.
     """
-    matches: List[Dict[str, Any]] = match_output.get("matches") or []
+    matches = match_output.matches
     if not matches:
         return 0.0
-    total = sum(float(m.get("confidence") or 0) for m in matches)
+    total = sum(float(m.confidence) for m in matches)
     return total / len(matches)
 
 
@@ -364,7 +364,7 @@ def _avg_confidence(match_output: Dict[str, Any]) -> float:
 def _build_diffs(
     current: List[Dict[str, Any]],
     candidate: List[Dict[str, Any]],
-    match_output: Dict[str, Any],
+    match_output: Any,
     threshold: int,
 ) -> List[Dict[str, Any]]:
     """
@@ -374,19 +374,19 @@ def _build_diffs(
       - swapped:   confident match found above threshold
       - kept_old:  match found but below threshold; keep existing supplier
       - unmatched: no match at all
-    """
-    matches: List[Dict[str, Any]] = match_output.get("matches") or []
-    unmatched_refs: set = set(
-        str(u.get("variant_ref") or "")
-        for u in (match_output.get("unmatched_store") or [])
-    )
 
-    # Index matches by store variant_ref for quick lookup
-    match_by_ref: Dict[str, Dict[str, Any]] = {}
+    match_output is a SkuMatchOutput dataclass with:
+      - matches: List[MatchResult]  (each has store_idx, candidate_idx, confidence, reasons)
+      - unmatched_store: List[int]  (indices into current)
+      - unmatched_candidate: List[int]
+    """
+    matches = match_output.matches
+    unmatched_store_indices: set = set(match_output.unmatched_store)
+
+    # Index matches by store variant index for quick lookup
+    match_by_store_idx: Dict[int, Any] = {}
     for m in matches:
-        store_ref = str(m.get("store_variant_ref") or m.get("variant_ref") or "")
-        if store_ref:
-            match_by_ref[store_ref] = m
+        match_by_store_idx[m.store_idx] = m
 
     # Index candidate variants by ref
     cand_by_ref: Dict[str, Dict[str, Any]] = {}
@@ -396,9 +396,9 @@ def _build_diffs(
     diffs: List[Dict[str, Any]] = []
     for idx, sv in enumerate(current):
         ref = sv["variant_ref"]
-        m = match_by_ref.get(ref)
+        m = match_by_store_idx.get(idx)
 
-        if m is None or ref in unmatched_refs:
+        if m is None or idx in unmatched_store_indices:
             diffs.append({
                 "index": idx,
                 "variant_ref": ref,
@@ -414,8 +414,10 @@ def _build_diffs(
             })
             continue
 
-        confidence = float(m.get("confidence") or 0)
-        matched_ref = str(m.get("candidate_variant_ref") or m.get("matched_ref") or "")
+        confidence = float(m.confidence)
+        matched_cand_idx = m.candidate_idx
+        matched_cand_variant = candidate[matched_cand_idx] if matched_cand_idx < len(candidate) else {}
+        matched_ref = matched_cand_variant.get("variant_ref", "")
         matched_cand = cand_by_ref.get(matched_ref, {})
 
         if confidence >= threshold:
@@ -434,7 +436,7 @@ def _build_diffs(
                     "supply_variant_title": matched_cand.get("title", ""),
                     "supplier_price": matched_cand.get("supplier_price"),
                 },
-                "reasons": m.get("reasons") or [],
+                "reasons": m.reasons or [],
             })
         else:
             diffs.append({
@@ -448,7 +450,7 @@ def _build_diffs(
                     "supply_variant_id": sv.get("supply_variant_id", ""),
                 },
                 "after": None,
-                "reasons": m.get("reasons", []) + [f"below_threshold({threshold})"],
+                "reasons": (m.reasons or []) + [f"below_threshold({threshold})"],
             })
 
     return diffs

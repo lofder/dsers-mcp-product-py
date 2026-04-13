@@ -17,11 +17,13 @@ Supports both single and batch modes:
 """
 from __future__ import annotations
 
+import asyncio
 import uuid as _uuid
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from dsers_mcp_product.concurrency import p_limit
 from dsers_mcp_product.job_store import FileJobStore
 from dsers_mcp_product.provider import ImportProvider
 from dsers_mcp_product.push_options import normalize_push_options
@@ -178,24 +180,34 @@ class ImportFlowService:
         shared = {k: payload.get(k) for k in shared_keys if payload.get(k) is not None}
         shared_rules = payload.get("rules")
 
-        results: List[Dict[str, Any]] = []
-        succeeded = 0
-        failed = 0
+        limit = p_limit(5)
 
-        for idx, item in enumerate(source_urls):
+        async def _do_one(idx: int, item: Any) -> Dict[str, Any]:
             url, item_payload = _parse_batch_item(item, shared, shared_rules)
             if not url:
-                results.append({"index": idx, "source_url": "", "error": "Empty or invalid URL entry / 空或无效的 URL 条目"})
-                failed += 1
-                continue
-
+                return {"index": idx, "source_url": "", "error": "Empty or invalid URL entry / 空或无效的 URL 条目", "_ok": False}
             try:
                 preview = await self._prepare_single(item_payload)
                 preview["index"] = idx
-                results.append(preview)
-                succeeded += 1
+                preview["_ok"] = True
+                return preview
             except Exception as exc:
-                results.append({"index": idx, "source_url": url, "error": str(exc)})
+                return {"index": idx, "source_url": url, "error": str(exc), "_ok": False}
+
+        raw_results = await asyncio.gather(*[
+            limit(lambda _idx=idx, _item=item: _do_one(_idx, _item))
+            for idx, item in enumerate(source_urls)
+        ])
+
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+        failed = 0
+        for r in raw_results:
+            ok = r.pop("_ok", False)
+            results.append(r)
+            if ok:
+                succeeded += 1
+            else:
                 failed += 1
 
         return {
@@ -299,6 +311,9 @@ class ImportFlowService:
         visibility_mode = str(payload.get("visibility_mode") or "").strip()
         if not job_id or not visibility_mode:
             raise ValueError("job_id and visibility_mode are required")
+        VALID_VISIBILITY = {"backend_only", "sell_immediately"}
+        if visibility_mode not in VALID_VISIBILITY:
+            raise ValueError(f"visibility_mode must be one of {VALID_VISIBILITY}, got '{visibility_mode}'")
         job = self._store.load(job_id)
         job["visibility_mode"] = visibility_mode
         job["updated_at"] = _utc_now()
@@ -421,13 +436,28 @@ class ImportFlowService:
         """
         Push a single job_id to multiple stores.
         将一个 job_id 推送到多个店铺。
+
+        Loads the job once, pushes to each store collecting results,
+        then saves once at the end with all push_results to avoid
+        each _push_single overwriting the same job state.
         """
         batch_id = f"batch-{_uuid.uuid4().hex[:12]}"
         job_id = str(payload.get("job_id") or "").strip()
         if not job_id:
             return {"error": "job_id is required when using target_stores / 使用 target_stores 时需要提供 job_id"}
 
+        job = self._store.load(job_id)
+
+        # Block push if rule persistence failed
+        if job.get("status") == "persist_failed":
+            raise ValueError(
+                "push_blocked_persist_failed: Rules were applied locally but failed to persist to DSers backend. "
+                "Pushing now would use OLD rules. "
+                "RECOVERY: Call update_rules to retry, or re-import the product."
+            )
+
         results: List[Dict[str, Any]] = []
+        push_results_by_store: List[Dict[str, Any]] = []
         succeeded = 0
         failed = 0
 
@@ -437,18 +467,56 @@ class ImportFlowService:
                 results.append({"job_id": job_id, "target_store": "", "error": "Empty store name / 空店铺名称"})
                 failed += 1
                 continue
-            single_payload = dict(payload)
-            single_payload["job_id"] = job_id
-            single_payload["target_store"] = store_name
-            single_payload.pop("target_stores", None)
+
+            visibility_mode = payload.get("visibility_mode") or job.get("visibility_mode") or "backend_only"
             try:
-                result = await self._push_single(single_payload)
-                result["target_store"] = store_name
-                results.append(result)
+                provider_caps = await self._provider.get_rule_capabilities(target_store=store_name)
+                push_option_check = normalize_push_options(
+                    payload.get("push_options"),
+                    visibility_mode,
+                    provider_caps.get("push_options"),
+                )
+                if push_option_check.get("errors"):
+                    raise ValueError("; ".join(push_option_check["errors"]))
+                effective_push_options = push_option_check.get("effective_push_options", {})
+                force_push = bool(payload.get("force_push") or effective_push_options.get("force_push"))
+
+                from dsers_mcp_product.push_guard import validate_push_safety
+                safety = validate_push_safety(job.get("draft") or {}, job.get("original_draft"))
+                if safety["blocked"] and not force_push:
+                    raise ValueError(
+                        "push_blocked_by_safety_check: " + " | ".join(safety["blocked"])
+                    )
+
+                result = await self._provider.commit_candidate(
+                    provider_state=job["provider_state"],
+                    draft=job["draft"],
+                    target_store=store_name,
+                    visibility_mode=visibility_mode,
+                    push_options=effective_push_options,
+                )
+                push_results_by_store.append({"target_store": store_name, "result": result})
+                out = {
+                    "job_id": job_id,
+                    "status": result.get("job_status", "push_requested"),
+                    "target_store": store_name,
+                    "visibility_requested": visibility_mode,
+                    "visibility_applied": result.get("visibility_applied", visibility_mode),
+                    "push_options_applied": result.get("push_options_applied", effective_push_options),
+                    "job_summary": result.get("summary", {}),
+                    "warnings": list(push_option_check.get("warnings") or []) + list(result.get("warnings", [])),
+                }
+                results.append(out)
                 succeeded += 1
             except Exception as exc:
                 results.append({"job_id": job_id, "target_store": store_name, "error": str(exc)})
                 failed += 1
+
+        # Save job once with all push results
+        job["status"] = "push_requested" if succeeded > 0 else job.get("status", "preview_ready")
+        job["updated_at"] = _utc_now()
+        job["push_results"] = push_results_by_store
+        self._store.save(job_id, job)
 
         return {
             "batch_id": batch_id,
@@ -485,26 +553,39 @@ class ImportFlowService:
             batch_push_options=batch_push_options,
         )
 
-        results: List[Dict[str, Any]] = []
-        succeeded = 0
-        failed = 0
+        limit = p_limit(5)
 
-        for task in tasks:
+        async def _do_push(task: Dict[str, Any]) -> Dict[str, Any]:
             if task.get("error"):
-                results.append(task)
-                failed += 1
-                continue
+                task["_ok"] = False
+                return task
             try:
                 result = await self._push_single(task["payload"])
                 result["target_store"] = task["target_store"]
-                results.append(result)
-                succeeded += 1
+                result["_ok"] = True
+                return result
             except Exception as exc:
-                results.append({
+                return {
                     "job_id": task.get("job_id", ""),
                     "target_store": task.get("target_store", ""),
                     "error": str(exc),
-                })
+                    "_ok": False,
+                }
+
+        raw_results = await asyncio.gather(*[
+            limit(lambda _task=task: _do_push(_task))
+            for task in tasks
+        ])
+
+        results: List[Dict[str, Any]] = []
+        succeeded = 0
+        failed = 0
+        for r in raw_results:
+            ok = r.pop("_ok", False)
+            results.append(r)
+            if ok:
+                succeeded += 1
+            else:
                 failed += 1
 
         return {

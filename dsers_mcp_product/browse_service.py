@@ -75,8 +75,8 @@ async def discover_products(provider: Any, params: Dict[str, Any]) -> Dict[str, 
 
 async def browse_import_list(provider: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """Browse the DSers import list with enriched variant data."""
-    page = int(params.get("page") or 1)
-    page_size = min(int(params.get("page_size") or 20), 100)
+    page = max(1, int(params.get("page") or 1))
+    page_size = max(1, min(int(params.get("page_size") or 20), 100))
 
     raw = await provider.list_import_items({"page": page, "page_size": page_size})
     items = raw.get("items") or []
@@ -91,8 +91,8 @@ async def browse_my_products(provider: Any, params: Dict[str, Any]) -> Dict[str,
     if not store_id:
         raise ValueError("store_id is required. Get it from dsers_store_discover.")
 
-    page = int(params.get("page") or 1)
-    page_size = min(int(params.get("page_size") or 20), 100)
+    page = max(1, int(params.get("page") or 1))
+    page_size = max(1, min(int(params.get("page_size") or 20), 100))
 
     raw = await provider.list_my_products({"store_id": store_id, "page": page, "page_size": page_size})
     items = raw.get("items") or []

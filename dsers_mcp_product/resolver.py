@@ -101,6 +101,9 @@ async def _fetch_html(source_url: str) -> str:
     Fetch the raw HTML of a page with a generic user-agent.
     使用通用 User-Agent 抓取页面原始 HTML。
     """
+    from .security import validate_url
+    validate_url(source_url)
+
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
         response = await client.get(source_url, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
@@ -111,6 +114,10 @@ def _extract_aliexpress_url(html: str) -> str:
     """
     Best-effort regex extraction of an AliExpress URL from raw HTML.
     Falls back to URL-decoded matching if plain-text patterns fail.
+
+    TODO(PY-P3-07): The extracted URL is passed to the provider without
+    sanitisation.  A malicious Accio page could inject crafted URLs
+    (e.g. javascript: or data: schemes).  Add scheme validation here.
 
     从原始 HTML 中尽力通过正则提取 AliExpress 链接。
     如果纯文本模式未命中，会回退到 URL 解码匹配。

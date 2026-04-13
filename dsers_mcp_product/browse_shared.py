@@ -12,7 +12,7 @@ ALIBABA_APP_IDS = {ALIBABA_APP_ID}
 def cents_to_dollars(cents: Optional[Union[float, int]]) -> Optional[float]:
     if cents is None:
         return None
-    return round(int(cents)) / 100
+    return round(cents) / 100
 
 
 def derive_supplier(supply_app_id: Optional[Union[str, int]]) -> str:

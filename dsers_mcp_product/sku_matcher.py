@@ -51,6 +51,9 @@ _HASH_CACHE_MAX = 200
 
 # ---------------------------------------------------------------------------
 # Synonym map / 同义词映射
+# TODO(PY-P3-08): The synonym table is small and only covers basic
+# size/colour abbreviations.  Consider expanding with common apparel
+# and electronics terminology, or loading from an external data file.
 # ---------------------------------------------------------------------------
 
 SYNONYMS: Dict[str, str] = {
@@ -284,25 +287,35 @@ async def _compute_dhash(image_url: str) -> Optional[str]:
     if not _check_pillow():
         return None
 
+    # Validate URL to prevent SSRF
+    from .security import validate_url
+    try:
+        validate_url(image_url)
+    except ValueError:
+        return None
+
     cached = _hash_cache.get(image_url)
     if cached is not None:
         return cached
 
     try:
-        import urllib.request
-
+        import httpx
         import PIL.Image
 
-        # Download in a thread to avoid blocking the event loop
-        # 在线程中下载以避免阻塞事件循环
-        def _download_and_hash() -> Optional[str]:
+        # Download with httpx (async, non-blocking)
+        # 使用 httpx 下载（异步，非阻塞）
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                image_url,
+                headers={"User-Agent": "dsers-sku-matcher/1.0"},
+            )
+            resp.raise_for_status()
+            img_bytes = resp.content
+
+        # Pillow image processing is CPU-bound — run in executor
+        # Pillow 图像处理是 CPU 密集型操作 —— 在执行器中运行
+        def _compute_hash(data: bytes) -> Optional[str]:
             try:
-                req = urllib.request.Request(
-                    image_url,
-                    headers={"User-Agent": "dsers-sku-matcher/1.0"},
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = resp.read(2 * 1024 * 1024)  # 2 MB cap
                 img = PIL.Image.open(BytesIO(data)).convert("L")  # grayscale
                 img = img.resize((9, 8), PIL.Image.LANCZOS)
                 pixels = list(img.getdata())
@@ -315,11 +328,11 @@ async def _compute_dhash(image_url: str) -> Optional[str]:
 
                 return "".join(bits)
             except Exception as exc:
-                log.debug("dHash download failed", {"url": image_url, "err": str(exc)})
+                log.debug("dHash image processing failed", {"url": image_url, "err": str(exc)})
                 return None
 
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _download_and_hash)
+        result = await loop.run_in_executor(None, _compute_hash, img_bytes)
         if result is not None:
             _hash_cache.put(image_url, result)
         return result
@@ -478,11 +491,14 @@ async def match_variants(
     )
 
     # --- Build score matrix (all pairs concurrently) / 构建分数矩阵（所有配对并发） ---
+    from .concurrency import p_limit
+    limit = p_limit(10)
+
     tasks: List[Any] = []
     indices: List[Tuple[int, int]] = []
     for si in range(n_store):
         for ci in range(n_cand):
-            tasks.append(_score_pair(store_variants[si], candidate_variants[ci]))
+            tasks.append(limit(lambda _si=si, _ci=ci: _score_pair(store_variants[_si], candidate_variants[_ci])))
             indices.append((si, ci))
 
     results = await asyncio.gather(*tasks)

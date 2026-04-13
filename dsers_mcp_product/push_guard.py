@@ -39,6 +39,10 @@ def validate_push_safety(
         cost = _to_num(v.get("supplier_price"))
         stock = _to_num(v.get("stock"))
 
+        # Negative stock → warning (likely data error)
+        if stock is not None and stock < 0:
+            warnings.append(f'Variant "{label}" has negative stock ({int(stock)}). This may indicate a data error.')
+
         # Zero or negative price → blocked
         if offer is not None and offer <= 0:
             blocked.append(

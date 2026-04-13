@@ -57,6 +57,10 @@ class MockImportProvider(ImportProvider):
     """
     A provider that always succeeds with deterministic sample data.
     一个始终返回确定性示例数据的提供者。
+
+    TODO(PY-P3-02): Add error simulation support — e.g. a flag to trigger
+    specific error codes (AUTH_REQUIRED, LIMIT_EXCEEDED) so integration
+    tests can exercise error-handling paths.
     """
 
     name = "mock"

@@ -8,6 +8,9 @@ version = "1.5.7"
 description = "Dropshipping automation with AI — import AliExpress/Alibaba products to Shopify & Wix via DSers. Open-source MCP server."
 readme = "README.md"
 requires-python = ">=3.10"
+# TODO(PY-P2-03): vendor-dsers/ is not published to PyPI; it is bundled
+# as a local package via sys.path manipulation in provider.py.  Consider
+# publishing it or adding a proper path dependency once the API stabilises.
 dependencies = [
     "mcp>=1.20.0,<2.0.0",
     "smithery>=0.4.4",

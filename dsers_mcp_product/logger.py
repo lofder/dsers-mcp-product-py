@@ -11,6 +11,9 @@ from typing import Any, Optional
 VALID_LEVELS = {"debug": 10, "info": 20, "warn": 30, "error": 40}
 DEFAULT_LEVEL = "info"
 
+# Intentionally cached at startup and never refreshed — matches the TS
+# version's behaviour where LOG_LEVEL is read once and held for the
+# lifetime of the process.
 _cached_level: Optional[str] = None
 
 
@@ -40,7 +43,7 @@ def _emit(level: str, msg: str, ctx: Optional[dict[str, Any]] = None) -> None:
     try:
         sys.stderr.write(json.dumps(record) + "\n")
     except Exception:
-        pass
+        pass  # intentionally suppressed — can't log a logging failure
 
 
 class _Logger:

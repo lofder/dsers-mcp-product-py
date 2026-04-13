@@ -96,6 +96,12 @@ class ImportProvider(ABC):
         return {}
 
 
+_ALLOWED_PROVIDER_MODULES = {
+    "dsers_provider.provider",
+    "dsers_mcp_product.mock_provider",
+}
+
+
 def load_provider() -> ImportProvider:
     """
     Dynamically load and instantiate the configured provider adapter.
@@ -109,6 +115,10 @@ def load_provider() -> ImportProvider:
     该模块必须暴露一个 build_provider() 工厂函数，返回 ImportProvider 实例。
     """
     module_name = os.getenv("IMPORT_PROVIDER_MODULE", "dsers_provider.provider")
+    if module_name not in _ALLOWED_PROVIDER_MODULES:
+        raise RuntimeError(
+            f"Provider module '{module_name}' is not in the allowed list: {_ALLOWED_PROVIDER_MODULES}"
+        )
     module = importlib.import_module(module_name)
     factory = getattr(module, "build_provider", None)
     if factory is None:

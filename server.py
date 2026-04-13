@@ -42,7 +42,10 @@ load_dotenv()
 
 # Job state directory — each import job is persisted as a JSON file here.
 # 任务状态目录 —— 每个导入任务以 JSON 文件形式持久化在此目录。
-STATE_DIR = Path(os.getenv("IMPORT_MCP_STATE_DIR", Path(__file__).resolve().parent / ".state"))
+# PY-P2-05: Tool names intentionally differ from the TypeScript version
+# (e.g. prepare_import_candidate vs dsers_product_import) — this is by design
+# to match Python naming conventions while the TS version follows DSers API conventions.
+STATE_DIR = Path(os.getenv("IMPORT_MCP_STATE_DIR") or Path.home() / ".dsers-mcp" / "state")
 
 # Provider and service are instantiated once at startup.
 # 提供者和服务在启动时实例化一次。
@@ -561,4 +564,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    import signal
+    import sys
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     asyncio.run(main())

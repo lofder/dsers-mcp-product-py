@@ -100,10 +100,13 @@ def normalize_rules(rules: Dict[str, Any], rule_capabilities: Optional[Dict[str,
     instruction_text = requested_rules.get("instruction_text")
     if instruction_text not in (None, ""):
         if isinstance(instruction_text, str):
-            effective_rules["instruction_text"] = instruction_text
-            warnings.append(
-                "instruction_text is stored in the rule snapshot for operator context, but only structured rules are applied automatically."
-            )
+            if len(instruction_text) > 10000:
+                errors.append("instruction_text exceeds maximum length of 10,000 characters.")
+            else:
+                effective_rules["instruction_text"] = instruction_text
+                warnings.append(
+                    "instruction_text is stored in the rule snapshot for operator context, but only structured rules are applied automatically."
+                )
         else:
             errors.append("instruction_text must be a string when provided.")
 
@@ -216,6 +219,9 @@ def _normalize_pricing_rules(
         if multiplier is None:
             errors.append("pricing.multiplier must be a number when pricing.mode='multiplier'.")
             return {}
+        if multiplier <= 0:
+            errors.append("pricing.multiplier must be greater than 0.")
+            return {}
         if multiplier > 100:
             warnings.append(
                 f"pricing.multiplier is {multiplier}x — this will set sell price to {multiplier}x the cost. Is this intentional?"
@@ -225,6 +231,9 @@ def _normalize_pricing_rules(
         markup = _as_float(pricing.get("fixed_markup"), None)
         if markup is None:
             errors.append("pricing.fixed_markup must be a number when pricing.mode='fixed_markup'.")
+            return {}
+        if markup < 0:
+            errors.append("pricing.fixed_markup must be >= 0.")
             return {}
         if markup > 500:
             warnings.append(
@@ -390,6 +399,9 @@ def _apply_pricing_rules(draft: Dict[str, Any], pricing: Dict[str, Any], summary
     Apply pricing adjustments to all variants in the draft.
     对草稿中的所有变体应用价格调整。
     """
+    # NOTE: Prices are expected in the same unit as the provider returns them
+    # (typically dollars for DSers). The provider normalization layer is responsible
+    # for unit consistency. Do NOT divide/multiply by 100 here.
     mode = pricing.get("mode", "provider_default")
     if mode == "provider_default":
         return

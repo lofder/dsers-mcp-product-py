@@ -2,6 +2,7 @@
 Structured error mapping — converts raw DSers errors into agent-friendly format.
 """
 
+import re
 from typing import Any
 from .security import sanitize_error
 
@@ -35,7 +36,7 @@ def format_error_for_agent(err: Any) -> str:
     safe = sanitize_error(msg)
 
     for reason, mapped in DSERS_REASON_MAP.items():
-        if reason.lower() in safe.lower():
+        if re.search(r'\b' + re.escape(reason) + r'\b', safe, re.IGNORECASE):
             return f"Error: {mapped['summary']}\nCause: {mapped['cause']}\nAction: {mapped['action']}"
 
     return f"Error: {safe[:200]}"
